@@ -1156,8 +1156,7 @@ def forward_backward_pipelining_without_interleaving(
     forward_data_store = []
 
     # Run warmup forward passes.
-    if is_last_rank:
-        tracers.tik("warmup start")
+    tracers.tik("warmup start")
     for i in range(num_warmup_microbatches):
         # Decide to checkpoint all layers' activations of the current micro-batch
         if max_outstanding_backprops is not None:
@@ -1195,8 +1194,7 @@ def forward_backward_pipelining_without_interleaving(
 
     # Run 1F1B in steady state.
     for i in range(num_microbatches_remaining):
-        if is_last_rank:
-            tracers.tik("forward start")
+        tracers.tik("forward start")
         last_iteration = i == (num_microbatches_remaining - 1)
 
         # Decide to checkpoint all layers' activations of the current micro-batch
@@ -1246,8 +1244,7 @@ def forward_backward_pipelining_without_interleaving(
                 if config.grad_sync_func is None or rank == 0:
                     enable_grad_sync()
 
-            if is_last_rank:
-                tracers.tik("backward start")
+            tracers.tik("backward start")
             input_tensor_grad = backward_step(
                 input_tensor, output_tensor, output_tensor_grad, model_type, config
             )
@@ -1261,8 +1258,7 @@ def forward_backward_pipelining_without_interleaving(
                 )
 
     # Run cooldown backward passes.
-    if is_last_rank:
-        tracers.tik("cooldown start")
+    tracers.tik("cooldown start")
     if not forward_only:
         for i in range(num_warmup_microbatches):
 
@@ -1296,8 +1292,7 @@ def forward_backward_pipelining_without_interleaving(
         config.timers('forward-backward').stop()
 
     torch.distributed.barrier()
-    if is_last_rank:
-        tracers.tik("allreduce start")
+    tracers.tik("allreduce start")
 
     if config.finalize_model_grads_func is not None and not forward_only:
         # Finalize model grads (perform full grad all-reduce / reduce-scatter for

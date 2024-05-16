@@ -113,6 +113,7 @@ def pretrain(train_valid_test_dataset_provider,
 
     args = get_args()
     timers = get_timers()
+    tracers = get_tracers()
 
     # Model, optimizer, and learning rate.
     timers('model-and-optimizer-setup', log_level=0).start(barrier=True)
@@ -164,9 +165,7 @@ def pretrain(train_valid_test_dataset_provider,
                               process_non_loss_data_func, config)
 
         print_datetime('after training is done')
-        if is_last_rank():
-            tracers = get_tracers()
-            tracers.log("benchmark.csv")
+        tracers.log(f"benchmark-rank-{torch.distributed.get_rank()}.csv")
 
         if args.save and iteration != 0:
             save_checkpoint(iteration, model, optimizer, opt_param_scheduler)
@@ -746,8 +745,9 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
         gc.collect()
 
     while iteration < args.train_iters:
-        if is_last_rank:
-            tracers.tik("iteration start")
+        # Barrier to make sure all ranks start the iteration at the same time.
+        torch.distributed.barrier()
+        tracers.tik("iteration start")
         if args.profile and \
            iteration == args.profile_step_start and \
            torch.distributed.get_rank() in args.profile_ranks:
@@ -767,8 +767,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
         args.consumed_train_samples += mpu.get_data_parallel_world_size() * \
                                        args.micro_batch_size * \
                                        get_num_microbatches()
-        if is_last_rank:
-            tracers.tik("iteration end")
+        tracers.tik("iteration end")
 
         # Logging.
         loss_scale = optimizer.get_loss_scale().item()
