@@ -232,6 +232,15 @@ def _ensure_var_is_not_initialized(var, name):
     """Make sure the input variable is not None."""
     assert var is None, '{} is already initialized.'.format(name)
 
+class _TracerScope:
+    def __init__(self, tracer, name):
+        self.tracer = tracer
+        self.name = name
+    def __enter__(self):
+        self.tracer.tik(f"{self.name} start")
+    def __exit__(self, type, value, traceback):
+        self.tracer.tik(f"{self.name} end")
+
 class Tracer:
     """Global tracer to record and print timestamp during training process"""
 
@@ -246,6 +255,9 @@ class Tracer:
         else:
             self.record.append([name, cur-self.cur])
         self.cur = cur
+
+    def scope(self, name):
+        return _TracerScope(self, name)
 
     def log(self, filename):
         with open(filename, "w", newline="") as file:

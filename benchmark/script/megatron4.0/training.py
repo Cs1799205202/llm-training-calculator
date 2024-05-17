@@ -25,7 +25,7 @@ from megatron import get_current_global_batch_size
 from megatron import get_num_microbatches
 from megatron import is_last_rank
 from megatron import update_num_microbatches
-from megatron.core import mpu, tensor_parallel
+from megatron.core import mpu, tensor_parallel, parallel_state
 from megatron.core.utils import get_model_config
 from megatron import print_rank_0
 from megatron import print_rank_last
@@ -165,7 +165,10 @@ def pretrain(train_valid_test_dataset_provider,
                               process_non_loss_data_func, config)
 
         print_datetime('after training is done')
-        tracers.log(f"benchmark-rank-{torch.distributed.get_rank()}.csv")
+        data_parallel_rank = parallel_state.get_data_parallel_rank()
+        tensor_model_parallel_rank = parallel_state.get_tensor_model_parallel_rank()
+        pipeline_model_parallel_rank = parallel_state.get_pipeline_model_parallel_rank()
+        tracers.log(f"benchmark-data-{data_parallel_rank}-tensor-{tensor_model_parallel_rank}-pipeline-{pipeline_model_parallel_rank}.csv")
 
         if args.save and iteration != 0:
             save_checkpoint(iteration, model, optimizer, opt_param_scheduler)
@@ -449,7 +452,8 @@ def train_step(forward_step_func, data_iterator,
 
     # Update parameters.
     timers('optimizer', log_level=1).start(barrier=args.barrier_with_L1_time)
-    update_successful, grad_norm, num_zeros_in_grad = optimizer.step(args, timers)
+    with tracers.scope('optimizer'):
+        update_successful, grad_norm, num_zeros_in_grad = optimizer.step(args, timers)
     timers('optimizer').stop()
 
     # Vision momentum.
