@@ -322,14 +322,11 @@ def _communicate(
             return []
 
         p2p_func = _ring_exchange_wrapper
-        tracers.tick("p2p_func", method="ring_exchange")
     elif config.batch_p2p_comm:
         assert wait_on_reqs
         p2p_func = _batched_p2p_ops
-        tracers.tick("p2p_func", method="batched")
     else:
         p2p_func = _p2p_ops
-        tracers.tick("p2p_func", method="p2p")
 
     reqs = p2p_func(
         tensor_send_prev=tensor_send_prev,
@@ -339,15 +336,10 @@ def _communicate(
         group=get_pipeline_model_parallel_group(),
     )
 
-    tracers.tick("p2p_reqs", expected=(
-        (tensor_send_prev is not None) + (tensor_recv_prev is not None) +
-        (tensor_send_next is not None) + (tensor_recv_next is not None)
-    ), actual=len(reqs) if reqs is not None else -1)
-
-    def fut_callback(_):
-        tracers.tick("p2p_done")
-    for req in reqs:
-        fut = req.get_future().add_done_callback(fut_callback)
+    for i, req in enumerate(reqs):
+        fut = req.get_future()
+        tracers.tick("p2p-begin", index=i, done=fut.done())
+        fut.then(lambda fut: tracers.tick("p2p-end", index=i, done=fut.done()))
 
     if wait_on_reqs and len(reqs) > 0:
         for req in reqs:

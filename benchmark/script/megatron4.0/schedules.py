@@ -1295,7 +1295,8 @@ def forward_backward_pipelining_without_interleaving(
         if no_sync_context is not None:
             enable_grad_sync()
             if config.grad_sync_func is not None:
-                config.grad_sync_func(model.parameters())
+                with tracers.scope("grad-sync"):
+                    config.grad_sync_func(model.parameters())
 
     if config.timers is not None:
         config.timers('forward-backward').stop()
