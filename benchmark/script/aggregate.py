@@ -1,4 +1,3 @@
-import csv
 from dataclasses import dataclass
 import json
 import os
@@ -21,18 +20,18 @@ class Rank:
         return self.tensor
 
 
-def collect_benchmark_files(dir: os.PathLike) -> List[Tuple[Rank, List[str]]]:
-    """Collect benchmark-rank-*.csv files from the given directory."""
+def collect_benchmark_files(dir: os.PathLike) -> List[Tuple[Rank, str]]:
+    """Collect benchmark.json files from the given directory."""
     files = []
     for file in os.listdir(dir):
-        if file.startswith('benchmark-') and file.endswith('.csv'):
-            desc = file[len('benchmark-'):-len('.csv')]
-            # disc is "data-*-tensor-*-pipeline-*"
+        if file.startswith('benchmark-') and file.endswith('.json'):
+            desc = file[len('benchmark-'):-len('.json')]
+            # disc is "data-*-pipeline-*-tensor-*"
             fields = desc.split('-')
             chunks = dict((fields[i], int(fields[i + 1])) for i in range(0, len(fields), 2))
             rank = Rank(**chunks)
             with open(os.path.join(dir, file), 'r') as f:
-                files.append((rank, f.readlines()))
+                files.append((rank, f.read()))
     return files
 
 
@@ -41,37 +40,44 @@ class Event:
     timestamp: float
     rank: Rank
     name: str
-    predicate: str
+    ph: str
+    attrs: Any
 
 
 @dataclass
 class Iteration:
+    pad_before: float
     events: List[Event]
     duration: float
 
 
-def read_benchmark_file(rank: Rank, content: List[str]) -> List[Iteration]:
+def read_benchmark_file(rank: Rank, content: str) -> List[Iteration]:
     """Returns events in each iteration."""
     data = []
-    reader = csv.reader(content)
-    for row in reader:
-        if row[0] == 'iteration start':
+    rows = json.loads(content)
+    for row in rows:
+        if row.name == 'iteration' and row.ph == 'B':
+            pad_before = row.delta
             current_iteration = []
             timeline = 0.0
         elif row[0] == 'iteration end':
-            data.append(Iteration(events=current_iteration, duration=timeline))
+            pad_before = None
+            data.append(Iteration(pad_before=pad_before, events=current_iteration, duration=timeline))
+            pad_before = None
             current_iteration = None
             timeline = None
         else:
             if timeline is None:
                 # In evaluation, so ignore.
                 continue
-            what, delta = row
-            # what is "event-name predicate"
-            name, predicate = what.split(' ')
-            delta = float(delta)
+            name = row.name
+            delta = row.delta
+            ph = row.ph
+            del row['name']
+            del row['delta']
+            del row['ph']
             timeline += delta
-            event = Event(timestamp=timeline, rank=rank, name=name, predicate=predicate)
+            event = Event(timestamp=timeline, rank=rank, name=name, ph=ph, attrs=row)
             current_iteration.append(event)
     return data
 
@@ -84,10 +90,11 @@ def aggregate_benchmark_data(contents: List[List[Iteration]]) -> List[Iteration]
     iterations = []
 
     for i in range(num_iterations):
+        pad_before = max(content[i].pad_before for content in contents)
         events = [event for content in contents for event in content[i].events]
         events.sort(key=lambda event: event.timestamp)
         duration = max(content[i].duration for content in contents)
-        iterations.append(Iteration(events=events, duration=duration))
+        iterations.append(Iteration(pad_before=pad_before, events=events, duration=duration))
 
     return iterations
 
@@ -123,23 +130,18 @@ def benchmark_to_chrome_trace(iterations: List[Iteration]) -> Any:
     trace = []
     timeline = 0.0
     for i, iteration in enumerate(iterations):
+        timeline += iteration.pad_before
         for event in iteration.events:
-            if event.predicate == 'start':
-                phase = 'B'
-            elif event.predicate == 'end':
-                phase = 'E'
-            else:
-                phase = 'i'
             trace.append({
                 'name': event.name,
                 'cname': COLOR_MAP.get(event.name, COLOR_UNKNOWN),
                 'cat': 'benchmark',
-                'ph': phase,
+                'ph': event.ph,
                 'ts': int((event.timestamp + timeline) * 1e6),
                 'pid': event.rank.to_pid(pipeline_paralellism),
                 'tid': event.rank.to_tid(),
                 # iteration number
-                'args': {'iteration': i}
+                'args': {'iteration': i, **event.attrs}
             })
         timeline += iteration.duration
     return trace
@@ -150,11 +152,5 @@ if __name__ == "__main__":
     files = collect_benchmark_files(benchmark_dir)
     contents = [read_benchmark_file(rank, content) for rank, content in files]
     aggregated = aggregate_benchmark_data(contents)
-    with open('benchmark.csv', 'w') as f:
-        writer = csv.writer(f)
-        for iteration in aggregated:
-            for event in iteration.events:
-                writer.writerow([event.timestamp, str(event.rank), event.name, event.predicate])
-            writer.writerow([])
     with open('benchmark.json', 'w') as f:
-        json.dump(benchmark_to_chrome_trace(aggregated), f)
+        json.dump(benchmark_to_chrome_trace(aggregated), f, indent=2)

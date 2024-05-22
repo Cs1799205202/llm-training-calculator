@@ -5,7 +5,7 @@
 import os
 import sys
 import time
-import csv
+import json
 import torch
 
 from megatron import dist_signal_handler
@@ -233,33 +233,42 @@ def _ensure_var_is_not_initialized(var, name):
     assert var is None, '{} is already initialized.'.format(name)
 
 class _TracerScope:
-    def __init__(self, tracer, name):
+    def __init__(self, tracer, name, attrs):
         self.tracer = tracer
         self.name = name
+        self.attrs = attrs
+    def begin(self):
+        self.tracer._tik(self.name, "B", self.attrs)
+    def end(self):
+        self.tracer._tik(self.name, "E", {})
     def __enter__(self):
-        self.tracer.tik(f"{self.name} start")
+        self.begin()
     def __exit__(self, type, value, traceback):
-        self.tracer.tik(f"{self.name} end")
+        self.end()
 
 class Tracer:
     """Global tracer to record and print timestamp during training process"""
 
     def __init__(self) -> None:
         self.record = []
-        self.cur = 0
+        self.cur = None
 
-    def tik(self, name):
+    def _tik(self, name, phase, attrs):
         cur = time.time()
-        if self.cur == 0:
-            self.record.append([name, 0])
+        if self.cur is None:
+            delta = 0.0
         else:
-            self.record.append([name, cur-self.cur])
+            delta = cur - self.cur
         self.cur = cur
 
-    def scope(self, name):
-        return _TracerScope(self, name)
+        attrs["name"] = name
+        attrs["ph"] = phase
+        attrs["delta"] = delta
+        self.record.append(attrs)
+
+    def scope(self, name, **kwargs):
+        return _TracerScope(self, name, kwargs)
 
     def log(self, filename):
         with open(filename, "w", newline="") as file:
-            writer = csv.writer(file)
-            writer.writerows(self.record)
+            json.dump(self.record, file, indent=2)

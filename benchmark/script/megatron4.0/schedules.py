@@ -1166,9 +1166,9 @@ def forward_backward_pipelining_without_interleaving(
         else:
             checkpoint_activations_microbatch = None
 
-        with tracers.scope("warmup-recv"):
+        with tracers.scope("warmup-recv", micro_batch_index=i):
             input_tensor = recv_forward(recv_tensor_shapes, config)
-        with tracers.scope("warmup-forward"):
+        with tracers.scope("warmup-forward", micro_batch_index=i):
             output_tensor = forward_step(
                 forward_step_func,
                 data_iterator,
@@ -1180,7 +1180,7 @@ def forward_backward_pipelining_without_interleaving(
                 collect_non_loss_data,
                 checkpoint_activations_microbatch,
             )
-        with tracers.scope("warmup-send"):
+        with tracers.scope("warmup-send", micro_batch_index=i):
             send_forward(output_tensor, send_tensor_shapes, config)
 
         if not forward_only:
@@ -1192,7 +1192,7 @@ def forward_backward_pipelining_without_interleaving(
     # If all microbatches are run in warmup / cooldown phase, then no need to
     # receive this tensor here.
     if num_microbatches_remaining > 0:
-        with tracers.scope("recv-extra"):
+        with tracers.scope("recv-extra", micro_batch_index=num_warmup_microbatches):
             input_tensor = recv_forward(recv_tensor_shapes, config)
 
     # Run 1F1B in steady state.
@@ -1207,7 +1207,7 @@ def forward_backward_pipelining_without_interleaving(
         else:
             checkpoint_activations_microbatch = None
 
-        with tracers.scope("forward"):
+        with tracers.scope("forward", micro_batch_index=i + num_warmup_microbatches):
             output_tensor = forward_step(
                 forward_step_func,
                 data_iterator,
@@ -1249,14 +1249,14 @@ def forward_backward_pipelining_without_interleaving(
                 if config.grad_sync_func is None or rank == 0:
                     enable_grad_sync()
 
-            with tracers.scope("backward"):
+            with tracers.scope("backward", micro_batch_index=i):
                 input_tensor_grad = backward_step(
                     input_tensor, output_tensor, output_tensor_grad, model_type, config
                 )
 
             if last_iteration:
                 input_tensor = None
-                with tracers.scope("send-extra"):
+                with tracers.scope("send-extra", micro_batch_index=num_microbatches - 1):
                     send_backward(input_tensor_grad, recv_tensor_shapes, config)
             else:
                 with tracers.scope("exchange-prev"):
@@ -1280,15 +1280,15 @@ def forward_backward_pipelining_without_interleaving(
             input_tensor = input_tensors.pop(0)
             output_tensor = output_tensors.pop(0)
 
-            with tracers.scope("cooldown-recv"):
+            with tracers.scope("cooldown-recv", micro_batch_index=num_microbatches_remaining + i):
                 output_tensor_grad = recv_backward(send_tensor_shapes, config)
 
-            with tracers.scope("cooldown-backward"):
+            with tracers.scope("cooldown-backward", micro_batch_index=num_microbatches_remaining + i):
                 input_tensor_grad = backward_step(
                     input_tensor, output_tensor, output_tensor_grad, model_type, config
                 )
 
-            with tracers.scope("cooldown-send"):
+            with tracers.scope("cooldown-send", micro_batch_index=num_microbatches_remaining + i):
                 send_backward(input_tensor_grad, recv_tensor_shapes, config)
 
         # Launch any remaining grad reductions.

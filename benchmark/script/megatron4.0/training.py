@@ -168,7 +168,7 @@ def pretrain(train_valid_test_dataset_provider,
         data_parallel_rank = parallel_state.get_data_parallel_rank()
         tensor_model_parallel_rank = parallel_state.get_tensor_model_parallel_rank()
         pipeline_model_parallel_rank = parallel_state.get_pipeline_model_parallel_rank()
-        tracers.log(f"benchmark-data-{data_parallel_rank}-tensor-{tensor_model_parallel_rank}-pipeline-{pipeline_model_parallel_rank}.csv")
+        tracers.log(f"benchmark-data-{data_parallel_rank}-pipeline-{pipeline_model_parallel_rank}-tensor-{tensor_model_parallel_rank}.json")
 
         if args.save and iteration != 0:
             save_checkpoint(iteration, model, optimizer, opt_param_scheduler)
@@ -751,7 +751,8 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
     while iteration < args.train_iters:
         # Barrier to make sure all ranks start the iteration at the same time.
         torch.distributed.barrier()
-        tracers.tik("iteration start")
+        it_trace = tracers.scope("iteration")
+        it_trace.begin()
         if args.profile and \
            iteration == args.profile_step_start and \
            torch.distributed.get_rank() in args.profile_ranks:
@@ -771,7 +772,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
         args.consumed_train_samples += mpu.get_data_parallel_world_size() * \
                                        args.micro_batch_size * \
                                        get_num_microbatches()
-        tracers.tik("iteration end")
+        it_trace.end()
 
         # Logging.
         loss_scale = optimizer.get_loss_scale().item()
