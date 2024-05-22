@@ -238,9 +238,9 @@ class _TracerScope:
         self.name = name
         self.attrs = attrs
     def begin(self):
-        self.tracer._tik(self.name, "B", self.attrs)
+        self.tracer._tick(self.name, "B", self.attrs)
     def end(self):
-        self.tracer._tik(self.name, "E", {})
+        self.tracer._tick(self.name, "E", {})
     def __enter__(self):
         self.begin()
     def __exit__(self, type, value, traceback):
@@ -253,7 +253,7 @@ class Tracer:
         self.record = []
         self.cur = None
 
-    def _tik(self, name, phase, attrs):
+    def _tick(self, name, phase, attrs):
         cur = time.time()
         if self.cur is None:
             delta = 0.0
@@ -265,6 +265,9 @@ class Tracer:
         attrs["ph"] = phase
         attrs["delta"] = delta
         self.record.append(attrs)
+
+    def tick(self, name, **attrs):
+        self._tick(name, "i", attrs)
 
     def scope(self, name, **kwargs):
         return _TracerScope(self, name, kwargs)

@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 import json
 import os
-from typing import Any, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 @dataclass
@@ -42,6 +42,7 @@ class Event:
     name: str
     ph: str
     attrs: Any
+    cat: Optional[str] = None
 
 
 @dataclass
@@ -54,7 +55,7 @@ class Iteration:
 def read_benchmark_file(rank: Rank, content: str) -> List[Iteration]:
     """Returns events in each iteration."""
     data = []
-    rows = json.loads(content)
+    rows: List[Dict[str, Any]] = json.loads(content)
     for row in rows:
         if row['name'] == 'iteration' and row['ph'] == 'B':
             pad_before = row['delta']
@@ -75,8 +76,12 @@ def read_benchmark_file(rank: Rank, content: str) -> List[Iteration]:
             del row['name']
             del row['delta']
             del row['ph']
+            cat = None
+            if row.get('cat') is not None:
+                cat = row['cat']
+                del row['cat']
             timeline += delta
-            event = Event(timestamp=timeline, rank=rank, name=name, ph=ph, attrs=row)
+            event = Event(timestamp=timeline, rank=rank, name=name, ph=ph, attrs=row, cat=cat)
             current_iteration.append(event)
     return data
 
@@ -126,29 +131,33 @@ COLOR_MAP = {
 def benchmark_to_chrome_trace(iterations: List[Iteration]) -> Any:
     """Convert benchmark data to Chrome trace format."""
     pipeline_paralellism = max(event.rank.pipeline for iteration in iterations for event in iteration.events) + 1
-    trace = []
+    traces = []
     timeline = 0.0
     for i, iteration in enumerate(iterations):
         timeline += iteration.pad_before
         for event in iteration.events:
-            trace.append({
+            trace = {
                 'name': event.name,
                 'cname': COLOR_MAP.get(event.name, COLOR_UNKNOWN),
-                'cat': 'benchmark',
                 'ph': event.ph,
                 'ts': int((event.timestamp + timeline) * 1e6),
                 'pid': event.rank.to_pid(pipeline_paralellism),
                 'tid': event.rank.to_tid(),
                 # iteration number
                 'args': {'iteration': i, **event.attrs}
-            })
+            }
+            if event.cat is not None:
+                trace['cat'] = event.cat
+            traces.append(trace)
         timeline += iteration.duration
-    return trace
+    return traces
 
 
 if __name__ == "__main__":
     benchmark_dir = '.'
     files = collect_benchmark_files(benchmark_dir)
+    if len(files) == 0:
+        files = collect_benchmark_files(os.path.join(benchmark_dir, 'Megatron'))
     contents = [read_benchmark_file(rank, content) for rank, content in files]
     aggregated = aggregate_benchmark_data(contents)
     with open('benchmark.json', 'w') as f:
