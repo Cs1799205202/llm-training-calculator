@@ -56,12 +56,11 @@ def read_benchmark_file(rank: Rank, content: str) -> List[Iteration]:
     data = []
     rows = json.loads(content)
     for row in rows:
-        if row.name == 'iteration' and row.ph == 'B':
-            pad_before = row.delta
+        if row['name'] == 'iteration' and row['ph'] == 'B':
+            pad_before = row['delta']
             current_iteration = []
             timeline = 0.0
-        elif row[0] == 'iteration end':
-            pad_before = None
+        elif row['name'] == 'iteration' and row['ph'] == 'E':
             data.append(Iteration(pad_before=pad_before, events=current_iteration, duration=timeline))
             pad_before = None
             current_iteration = None
@@ -70,9 +69,9 @@ def read_benchmark_file(rank: Rank, content: str) -> List[Iteration]:
             if timeline is None:
                 # In evaluation, so ignore.
                 continue
-            name = row.name
-            delta = row.delta
-            ph = row.ph
+            name = row['name']
+            delta = row['delta']
+            ph = row['ph']
             del row['name']
             del row['delta']
             del row['ph']
