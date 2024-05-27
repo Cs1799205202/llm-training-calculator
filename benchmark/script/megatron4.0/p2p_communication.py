@@ -336,11 +336,6 @@ def _communicate(
         group=get_pipeline_model_parallel_group(),
     )
 
-    for i, req in enumerate(reqs):
-        fut = req.get_future()
-        tracers.tick("p2p-begin", index=i, done=fut.done())
-        fut.then(lambda fut: tracers.tick("p2p-end", index=i, done=fut.done()))
-
     if wait_on_reqs and len(reqs) > 0:
         for req in reqs:
             req.wait()

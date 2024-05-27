@@ -1305,7 +1305,6 @@ def forward_backward_pipelining_without_interleaving(
         # Finalize model grads (perform full grad all-reduce / reduce-scatter for
         # data parallelism, layernorm all-reduce for sequence parallelism, and
         # embedding all-reduce for pipeline parallelism).
-        torch.distributed.barrier()
         with tracers.scope("allreduce"):
             config.finalize_model_grads_func([model])
 
