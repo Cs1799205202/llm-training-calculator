@@ -2,6 +2,7 @@
 
 """Megatron global variables."""
 
+from functools import wraps
 import os
 import sys
 import time
@@ -272,6 +273,18 @@ class Tracer:
     def scope(self, name, **kwargs):
         return _TracerScope(self, name, kwargs)
 
+    def scoped(self, func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            with self.scope(func.__name__):
+                return func(*args, **kwargs)
+        return wrapper
+
     def log(self, filename):
         with open(filename, "w", newline="") as file:
             json.dump(self.record, file, indent=2)
+
+
+def trace_scoped(func):
+    tracers = get_tracers()
+    return tracers.scoped(func)

@@ -1307,5 +1307,6 @@ def forward_backward_pipelining_without_interleaving(
         # embedding all-reduce for pipeline parallelism).
         with tracers.scope("allreduce"):
             config.finalize_model_grads_func([model])
+            torch.cuda.synchronize()
 
     return forward_data_store

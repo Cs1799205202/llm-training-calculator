@@ -75,6 +75,11 @@ install_v4.0() {
     do
         echo_back "cp script/megatron4.0/${_item} Megatron/megatron/core/pipeline_parallel/"
     done
+    local _sw_list=(layers.py mappings.py)
+    for _item in ${_sw_list[@]}
+    do
+        echo_back "cp script/megatron4.0/${_item} Megatron/megatron/core/tensor_parallel/"
+    done
 }
 
 setup() {
