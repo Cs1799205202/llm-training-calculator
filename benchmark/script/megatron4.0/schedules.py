@@ -8,8 +8,7 @@ from torch.autograd.variable import Variable
 
 from megatron.core import parallel_state
 from megatron.core.enums import ModelType
-from megatron import get_tracers
-from megatron import is_last_rank
+from megatron.core.trace import tracers
 from megatron.core.pipeline_parallel import p2p_communication
 from megatron.core.utils import get_attr_wrapped_model, get_model_config, get_model_type
 
@@ -1062,7 +1061,6 @@ def forward_backward_pipelining_without_interleaving(
     stages.
 
     Returns dictionary with losses if the last stage, empty dict otherwise."""
-    tracers = get_tracers()
 
     if isinstance(model, list):
         assert (

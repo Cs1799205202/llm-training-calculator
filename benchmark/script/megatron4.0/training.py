@@ -18,7 +18,7 @@ import torch
 from megatron import get_args
 from megatron import get_signal_handler
 from megatron import get_timers
-from megatron import get_tracers
+from megatron.core.trace import tracers
 from megatron import get_tensorboard_writer
 from megatron import get_wandb_writer
 from megatron import get_current_global_batch_size
@@ -113,7 +113,6 @@ def pretrain(train_valid_test_dataset_provider,
 
     args = get_args()
     timers = get_timers()
-    tracers = get_tracers()
 
     # Model, optimizer, and learning rate.
     timers('model-and-optimizer-setup', log_level=0).start(barrier=True)
@@ -419,7 +418,6 @@ def train_step(forward_step_func, data_iterator,
     """Single training step."""
     args = get_args()
     timers = get_timers()
-    tracers = get_tracers()
 
     # Set grad to zero.
     for model_chunk in model:
@@ -699,7 +697,6 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
     """Train the model function."""
     args = get_args()
     timers = get_timers()
-    tracers = get_tracers()
 
     # Write args to tensorboard
     write_args_to_tensorboard()

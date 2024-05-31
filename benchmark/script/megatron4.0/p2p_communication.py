@@ -6,7 +6,7 @@ from typing import Callable, List, Optional, Tuple, Union
 
 import torch
 
-from megatron import core, get_tracers
+from megatron import core
 from megatron.core import ModelParallelConfig
 from megatron.core.parallel_state import (
     get_pipeline_model_parallel_group,
@@ -14,6 +14,7 @@ from megatron.core.parallel_state import (
     get_pipeline_model_parallel_prev_rank,
     get_pipeline_model_parallel_rank,
 )
+from megatron.core.trace import tracers
 
 # Types
 Shape = Union[List[int], torch.Size]
@@ -269,8 +270,6 @@ def _communicate(
         - tensor_recv_next: torch.Tensor if recv_next is True, None otherwise.
 
     """
-
-    tracers = get_tracers()
 
     # Create placeholder tensors for receive in forward and backward directions
     # if needed.

@@ -8,7 +8,7 @@ from megatron.core.parallel_state import (
     get_tensor_model_parallel_rank,
     get_tensor_model_parallel_world_size,
 )
-from megatron import trace_scoped
+from ..trace import tracers
 
 from .utils import split_tensor_along_last_dim
 
@@ -323,46 +323,46 @@ class _ReduceScatterToSequenceParallelRegionFromMOE(torch.autograd.Function):
 # -----------------
 
 
-@trace_scoped
+@tracers.scoped
 def copy_to_tensor_model_parallel_region(input_):
     return _CopyToModelParallelRegion.apply(input_)
 
 
-@trace_scoped
+@tracers.scoped
 def reduce_from_tensor_model_parallel_region(input_):
     return _ReduceFromModelParallelRegion.apply(input_)
 
 
-@trace_scoped
+@tracers.scoped
 def scatter_to_tensor_model_parallel_region(input_):
     return _ScatterToModelParallelRegion.apply(input_)
 
 
-@trace_scoped
+@tracers.scoped
 def gather_from_tensor_model_parallel_region(input_):
     return _GatherFromModelParallelRegion.apply(input_)
 
 
-@trace_scoped
+@tracers.scoped
 def scatter_to_sequence_parallel_region(input_):
     return _ScatterToSequenceParallelRegion.apply(input_)
 
 
-@trace_scoped
+@tracers.scoped
 def gather_from_sequence_parallel_region(input_, tensor_parallel_output_grad=True):
     return _GatherFromSequenceParallelRegion.apply(input_, tensor_parallel_output_grad)
 
 
-@trace_scoped
+@tracers.scoped
 def reduce_scatter_to_sequence_parallel_region(input_):
     return _ReduceScatterToSequenceParallelRegion.apply(input_)
 
 
-@trace_scoped
+@tracers.scoped
 def gather_from_sequence_parallel_region_to_moe(input_):
     return _GatherFromSequenceParallelRegionToMOE.apply(input_)
 
 
-@trace_scoped
+@tracers.scoped
 def reduce_scatter_to_sequence_parallel_region_from_moe(input_):
     return _ReduceScatterToSequenceParallelRegionFromMOE.apply(input_)

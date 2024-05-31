@@ -65,7 +65,12 @@ install_v4.0() {
     echo_info "install nltk"
     echo_back "pip install nltk"
     echo_info "install tracer"
-    local _sw_list=(__init__.py global_vars.py training.py)
+    local _sw_list=(trace.py)
+    for _item in ${_sw_list[@]}
+    do
+        echo_back "cp script/megatron4.0/${_item} Megatron/megatron/core/"
+    done
+    local _sw_list=(training.py)
     for _item in ${_sw_list[@]}
     do
         echo_back "cp script/megatron4.0/${_item} Megatron/megatron/"
