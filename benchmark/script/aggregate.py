@@ -118,6 +118,8 @@ COLOR_MAP = {
     'cooldown-backward': COLOR_BACKWARD,
     'recv-extra': COLOR_RECV,
     'warmup-recv': COLOR_RECV,
+    'forward-recv': COLOR_RECV,
+    'backward-recv': COLOR_RECV,
     'cooldown-recv': COLOR_RECV,
     'send-extra': COLOR_SEND,
     'warmup-send': COLOR_SEND,

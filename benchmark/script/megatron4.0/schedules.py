@@ -1225,8 +1225,7 @@ def forward_backward_pipelining_without_interleaving(
                 input_tensor = recv_forward(recv_tensor_shapes, config)
 
         else:
-            # TODO: trace send and recv separately
-            with tracers.scope("exchange-next"):
+            with tracers.context(trace_p2p_recv="backward-recv"):
                 output_tensor_grad = send_forward_recv_backward(
                     output_tensor, send_tensor_shapes, config
                 )
@@ -1257,7 +1256,7 @@ def forward_backward_pipelining_without_interleaving(
                 with tracers.scope("send-extra", micro_batch_index=num_microbatches - 1):
                     send_backward(input_tensor_grad, recv_tensor_shapes, config)
             else:
-                with tracers.scope("exchange-prev"):
+                with tracers.context(trace_p2p_recv="forward-recv"):
                     input_tensor = send_backward_recv_forward(
                         input_tensor_grad, recv_tensor_shapes, config
                     )

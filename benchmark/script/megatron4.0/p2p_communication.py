@@ -313,6 +313,14 @@ def _communicate(
             dtype=config.pipeline_dtype,
         )
 
+    trace_p2p_recv = tracers.get("trace_p2p_recv")
+
+    # For simplicity, we now only support tracing for batched p2p communication.
+    if trace_p2p_recv is not None:
+        assert not config.use_ring_exchange_p2p
+        assert config.batch_p2p_comm
+        assert wait_on_reqs
+
     # Send tensors in both the forward and backward directions as appropriate.
     if config.use_ring_exchange_p2p:
 
@@ -336,14 +344,30 @@ def _communicate(
     )
 
     if wait_on_reqs and len(reqs) > 0:
-        for req in reqs:
-            req.wait()
-        reqs = None
+        if trace_p2p_recv is not None:
+            assert len(reqs) == 2
+            assert tensor_send_prev is not None == tensor_recv_prev is not None
+            assert tensor_send_next is not None == tensor_recv_next is not None
+            trace_start = torch.cuda.Event(enable_timing=True)
+            trace_end = torch.cuda.Event(enable_timing=True)
+            trace_start.record()
+            # Sync the default stream with the recv stream
+            reqs[1].wait()
+            trace_end.record()
+            reqs[0].wait()
+        else:
+            for req in reqs:
+                req.wait()
+            reqs = None
 
     if config.batch_p2p_comm and config.batch_p2p_sync:
         # To protect against race condition when using batch_isend_irecv().
         # User should assert that we have a modern enough PyTorch to not need this
         torch.cuda.synchronize()
+
+    if trace_p2p_recv is not None:
+        duration = int(trace_start.elapsed_time(trace_end) * 1e3)
+        tracers.duration(trace_p2p_recv, duration)
 
     return tensor_recv_prev, tensor_recv_next, reqs
 
