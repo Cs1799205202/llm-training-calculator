@@ -37,7 +37,7 @@ def collect_benchmark_files(dir: os.PathLike) -> List[Tuple[Rank, str]]:
 
 @dataclass
 class Event:
-    timestamp: float
+    timestamp: int
     rank: Rank
     name: str
     ph: str
@@ -47,9 +47,9 @@ class Event:
 
 @dataclass
 class Iteration:
-    pad_before: float
+    pad_before: int
     events: List[Event]
-    duration: float
+    duration: int
 
 
 def read_benchmark_file(rank: Rank, content: str) -> List[Iteration]:
@@ -60,7 +60,7 @@ def read_benchmark_file(rank: Rank, content: str) -> List[Iteration]:
         if row['name'] == 'iteration' and row['ph'] == 'B':
             pad_before = row['delta']
             current_iteration = []
-            timeline = 0.0
+            timeline = 0
         elif row['name'] == 'iteration' and row['ph'] == 'E':
             data.append(Iteration(pad_before=pad_before, events=current_iteration, duration=timeline))
             pad_before = None
@@ -132,7 +132,7 @@ def benchmark_to_chrome_trace(iterations: List[Iteration]) -> Any:
     """Convert benchmark data to Chrome trace format."""
     pipeline_paralellism = max(event.rank.pipeline for iteration in iterations for event in iteration.events) + 1
     traces = []
-    timeline = 0.0
+    timeline = 0
     for i, iteration in enumerate(iterations):
         timeline += iteration.pad_before
         for event in iteration.events:
@@ -140,7 +140,7 @@ def benchmark_to_chrome_trace(iterations: List[Iteration]) -> Any:
                 'name': event.name,
                 'cname': COLOR_MAP.get(event.name, COLOR_UNKNOWN),
                 'ph': event.ph,
-                'ts': int((event.timestamp + timeline) * 1e6),
+                'ts': int((event.timestamp + timeline) / 1e3),
                 'pid': event.rank.to_pid(pipeline_paralellism),
                 'tid': event.rank.to_tid(),
                 # iteration number

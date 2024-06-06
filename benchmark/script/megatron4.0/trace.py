@@ -26,9 +26,9 @@ class Tracer:
         self.cur = None
 
     def _tick(self, name, phase, attrs):
-        cur = time.time()
+        cur = time.time_ns()
         if self.cur is None:
-            delta = 0.0
+            delta = 0
         else:
             delta = cur - self.cur
         self.cur = cur
