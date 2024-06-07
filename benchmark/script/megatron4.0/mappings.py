@@ -13,6 +13,7 @@ from ..trace import tracers
 from .utils import split_tensor_along_last_dim
 
 
+@tracers.scoped
 def _reduce(input_):
     """All-reduce the input tensor across model parallel group."""
 
@@ -26,6 +27,7 @@ def _reduce(input_):
     return input_
 
 
+@tracers.scoped
 def _split_along_last_dim(input_):
     """Split the tensor along its last dimension and keep the
     corresponding slice."""
@@ -45,6 +47,7 @@ def _split_along_last_dim(input_):
     return output
 
 
+@tracers.scoped
 def _split_along_first_dim(input_):
     """Split the tensor along its first dimension and keep the
     corresponding slice."""
@@ -68,6 +71,7 @@ def _split_along_first_dim(input_):
     return output
 
 
+@tracers.scoped
 def _gather_along_last_dim(input_):
     """Gather tensors and concatinate along the last dimension."""
 
@@ -90,6 +94,7 @@ def _gather_along_last_dim(input_):
     return output
 
 
+@tracers.scoped
 def _gather_along_first_dim(input_):
     """Gather tensors and concatinate along the first dimension."""
 
@@ -109,6 +114,7 @@ def _gather_along_first_dim(input_):
     return output
 
 
+@tracers.scoped
 def _reduce_scatter_along_first_dim(input_):
     """Reduce-scatter the input tensor across model parallel group."""
     world_size = get_tensor_model_parallel_world_size()
@@ -130,6 +136,7 @@ def _reduce_scatter_along_first_dim(input_):
     return output
 
 
+@tracers.scoped
 def _gather_along_first_dim_moe(input_):
     """Gather tensors and concatenate along the first dimension."""
     group = get_tensor_and_expert_parallel_group()
@@ -147,6 +154,7 @@ def _gather_along_first_dim_moe(input_):
     return output
 
 
+@tracers.scoped
 def _reduce_scatter_along_first_dim_moe(input_):
     """Reduce-scatter the input tensor across model parallel group."""
     group = get_tensor_and_expert_parallel_group()
@@ -323,46 +331,37 @@ class _ReduceScatterToSequenceParallelRegionFromMOE(torch.autograd.Function):
 # -----------------
 
 
-@tracers.scoped
 def copy_to_tensor_model_parallel_region(input_):
     return _CopyToModelParallelRegion.apply(input_)
 
 
-@tracers.scoped
 def reduce_from_tensor_model_parallel_region(input_):
     return _ReduceFromModelParallelRegion.apply(input_)
 
 
-@tracers.scoped
 def scatter_to_tensor_model_parallel_region(input_):
     return _ScatterToModelParallelRegion.apply(input_)
 
 
-@tracers.scoped
 def gather_from_tensor_model_parallel_region(input_):
     return _GatherFromModelParallelRegion.apply(input_)
 
 
-@tracers.scoped
 def scatter_to_sequence_parallel_region(input_):
     return _ScatterToSequenceParallelRegion.apply(input_)
 
 
-@tracers.scoped
 def gather_from_sequence_parallel_region(input_, tensor_parallel_output_grad=True):
     return _GatherFromSequenceParallelRegion.apply(input_, tensor_parallel_output_grad)
 
 
-@tracers.scoped
 def reduce_scatter_to_sequence_parallel_region(input_):
     return _ReduceScatterToSequenceParallelRegion.apply(input_)
 
 
-@tracers.scoped
 def gather_from_sequence_parallel_region_to_moe(input_):
     return _GatherFromSequenceParallelRegionToMOE.apply(input_)
 
 
-@tracers.scoped
 def reduce_scatter_to_sequence_parallel_region_from_moe(input_):
     return _ReduceScatterToSequenceParallelRegionFromMOE.apply(input_)

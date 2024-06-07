@@ -14,7 +14,7 @@ from megatron.core.parallel_state import (
     get_pipeline_model_parallel_prev_rank,
     get_pipeline_model_parallel_rank,
 )
-from megatron.core.trace import tracers
+from megatron.core.trace import tracers, get_tensor_bytes
 
 # Types
 Shape = Union[List[int], torch.Size]
@@ -313,13 +313,12 @@ def _communicate(
             dtype=config.pipeline_dtype,
         )
 
-    trace_p2p_recv = tracers.get("trace_p2p_recv")
-
-    # For simplicity, we now only support tracing for batched p2p communication.
-    if trace_p2p_recv is not None:
-        assert not config.use_ring_exchange_p2p
-        assert config.batch_p2p_comm
-        assert wait_on_reqs
+    if tracers.get("data") is not None:
+        data_bytes = 0
+        for t in [tensor_send_prev, tensor_recv_prev, tensor_send_next, tensor_recv_next]:
+            if t is not None:
+                data_bytes += get_tensor_bytes(t)
+        tracers.set("data", data_bytes)
 
     # Send tensors in both the forward and backward directions as appropriate.
     if config.use_ring_exchange_p2p:
@@ -342,6 +341,14 @@ def _communicate(
         tensor_recv_next=tensor_recv_next,
         group=get_pipeline_model_parallel_group(),
     )
+
+    trace_p2p_recv = tracers.get("trace_p2p_recv")
+
+    # For simplicity, we now only support tracing for batched p2p communication.
+    if trace_p2p_recv is not None:
+        assert not config.use_ring_exchange_p2p
+        assert config.batch_p2p_comm
+        assert wait_on_reqs
 
     if wait_on_reqs and len(reqs) > 0:
         if trace_p2p_recv is not None:
