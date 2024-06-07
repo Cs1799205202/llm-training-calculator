@@ -1,7 +1,8 @@
 from functools import wraps
 import json
 import time
-from typing import Any, Dict, Optional
+import torch
+from typing import Any, Dict, List, Optional
 
 
 class _TracerScope:
@@ -34,25 +35,85 @@ class Tracer:
     """Global tracer to record and print timestamp during training process"""
 
     def __init__(self) -> None:
-        self.record = []
-        self.cur = None
+        self.record: List[Any] = []
+        self.cur: int = None
+        self.pending_initial_delta: int = None
+        self.pending: List[Any] = None
         self.contexts = []
 
-    def _add_record(self, name: str, phase: str, delta: int, attrs: Dict[str, Any]) -> None:
-        attrs["name"] = name
-        attrs["ph"] = phase
-        attrs["delta"] = delta
-        self.record.append(attrs)
-
-    def _tick(self, name: str, phase: str, attrs: Dict[str, Any]) -> None:
+    def _calibrate(self) -> int:
+        """Reset the clock and get delta."""
         cur = time.time_ns()
         if self.cur is None:
             delta = 0
         else:
             delta = cur - self.cur
         self.cur = cur
+        return delta
 
-        self._add_record(name, phase, delta, attrs)
+    def _add_record(self, attrs: Dict[str, Any]) -> None:
+        self.record.append(attrs)
+
+    def _create_record(self, name: str, phase: str, delta: int, attrs: Dict[str, Any]) -> Any:
+        attrs["name"] = name
+        attrs["ph"] = phase
+        attrs["delta"] = delta
+        return attrs
+
+    def _add_pending(self, attrs: Dict[str, Any]) -> None:
+        self.pending.append(attrs)
+
+    def _add_cuda_event(self, name: str, phase: str, attrs: Dict[str, Any]) -> None:
+        event = torch.cuda.Event(enable_timing=True)
+        event.record()
+        attrs["cuda_event"] = event
+        # Do not know the duration yet, so let delta be 0
+        self._add_pending(self._create_record(name, phase, 0, attrs))
+
+    def iteration_begin(self) -> None:
+        """Start tracing an iteration."""
+        delta = self._calibrate()
+        self.pending_initial_delta = delta
+        self.pending = []
+        # Mark the beginning of the iteration
+        self._add_cuda_event("iteration", "B", {})
+
+    def is_tracing(self) -> bool:
+        return self.pending is not None
+
+    def iteration_end(self) -> None:
+        """End tracing an iteration. Note that this performs synchronization."""
+        # Mark the end of the iteration
+        self._add_cuda_event("iteration", "E", {})
+        # Wait for all events to finish
+        torch.cuda.synchronize()
+        # Get wall clock duration for this iteration
+        wall_duration = self._calibrate()
+
+        # Calculate the delta of each event
+        delta = self.pending_initial_delta
+        cuda_duration = delta
+        for i, begin in enumerate(self.pending[:-1]):
+            end = self.pending[i + 1]
+            begin["delta"] = delta
+            # nanoseconds
+            delta = int(end["cuda_event"].elapsed_time(begin["cuda_event"]) * 1e6)
+            cuda_duration += delta
+            del begin["cuda_event"]
+            self._add_record(begin)
+        end = self.pending[-1]
+        end["delta"] = delta
+        del end["cuda_event"]
+        end["duration_wall"] = wall_duration
+        end["duration_cuda"] = cuda_duration
+        self._add_record(end)
+
+        self.pending_initial_delta = None
+        self.pending = None
+
+    def _tick(self, name: str, phase: str, attrs: Dict[str, Any]) -> None:
+        if self.is_tracing():
+            self._add_cuda_event(name, phase, attrs)
 
     def tick(self, name: str, **attrs: Any) -> None:
         """Record an event."""
@@ -61,20 +122,6 @@ class Tracer:
     def scope(self, name: str, **kwargs: Any) -> _TracerScope:
         """Time a scope of code."""
         return _TracerScope(self, name, kwargs)
-
-    def duration(self, name: str, duration: int, delta: int, **attrs: Any) -> None:
-        """Record a duration, in nanoseconds.
-        Here is the timeline of the duration event:
-            |<----- duration ----->|<-- delta -->|
-          begin                   end           now
-        """
-        cur = time.time_ns()
-        delta_begin = cur - self.cur - duration - delta
-        delta_end = duration
-        self.cur = cur
-
-        self._add_record(name, "B", delta_begin, attrs)
-        self._add_record(name, "E", delta_end, {})
 
     def scoped(self, func):
         """Decorator to time a function."""

@@ -748,8 +748,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
     while iteration < args.train_iters:
         # Barrier to make sure all ranks start the iteration at the same time.
         torch.distributed.barrier()
-        it_trace = tracers.scope("iteration")
-        it_trace.begin()
+        tracers.iteration_begin()
         if args.profile and \
            iteration == args.profile_step_start and \
            torch.distributed.get_rank() in args.profile_ranks:
@@ -769,7 +768,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
         args.consumed_train_samples += mpu.get_data_parallel_world_size() * \
                                        args.micro_batch_size * \
                                        get_num_microbatches()
-        it_trace.end()
+        tracers.iteration_end()
 
         # Logging.
         loss_scale = optimizer.get_loss_scale().item()

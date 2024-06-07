@@ -349,15 +349,10 @@ def _communicate(
             assert len(reqs) == 2
             assert (tensor_send_prev is None) == (tensor_recv_prev is None)
             assert (tensor_send_next is None) == (tensor_recv_next is None)
-            trace_begin = torch.cuda.Event(enable_timing=True)
-            trace_end = torch.cuda.Event(enable_timing=True)
-            trace_now = torch.cuda.Event(enable_timing=True)
-            trace_begin.record()
-            # Sync the default stream with the recv stream.
-            reqs[1].wait()
-            trace_end.record()
+            with tracers.scope(trace_p2p_recv):
+                # Sync the default stream with the recv stream.
+                reqs[1].wait()
             reqs[0].wait()
-            trace_now.record()
         else:
             for req in reqs:
                 req.wait()
@@ -367,11 +362,6 @@ def _communicate(
         # To protect against race condition when using batch_isend_irecv().
         # User should assert that we have a modern enough PyTorch to not need this
         torch.cuda.synchronize()
-
-    if trace_p2p_recv is not None:
-        duration = int(trace_begin.elapsed_time(trace_end) * 1e6)
-        delta = int(trace_end.elapsed_time(trace_now) * 1e6)
-        tracers.duration(trace_p2p_recv, duration, delta)
 
     return tensor_recv_prev, tensor_recv_next, reqs
 
