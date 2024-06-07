@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from functools import wraps
 import json
 import time
@@ -28,69 +29,104 @@ class _TracerScope:
 
     def set(self, q: str, v: Any) -> bool:
         """Set to out_attrs, if this is required."""
-        if "q" in self.out_attrs and self.out_attrs[q] is None:
+        if q in self.out_attrs and self.out_attrs[q] is None:
             self.out_attrs[q] = v
             return True
         else:
             return False
 
 
+@dataclass
+class _Pending:
+    name: str
+    phase: str
+    event: torch.cuda.Event
+    attrs: Dict[str, Any]
+
+
 class Tracer:
     """Global tracer to record and print timestamp during training process"""
 
     def __init__(self) -> None:
-        self.record: List[Any] = []
-        self.cur: int = None
-        self.pending_initial_delta: int = None
-        self.pending: List[Any] = None
-        self.scopes: List[_TracerScope] = []
+        self._records: List[Any] = []
+        self._cur: int = None
+        self._pending_pad_before: int = None
+        self._pendings: List[_Pending] = None
+        self._scopes: List[_TracerScope] = []
 
     def _calibrate(self) -> int:
         """Reset the clock and get delta."""
         cur = time.time_ns()
-        if self.cur is None:
+        if self._cur is None:
             delta = 0
         else:
-            delta = cur - self.cur
-        self.cur = cur
+            delta = cur - self._cur
+        self._cur = cur
         return delta
 
     def _add_record(self, attrs: Dict[str, Any]) -> None:
-        self.record.append(attrs)
+        self._records.append(attrs)
 
-    def _create_record(self, name: str, phase: str, delta: int, attrs: Dict[str, Any]) -> Any:
-        attrs["name"] = name
-        attrs["ph"] = phase
-        attrs["delta"] = delta
-        return attrs
+    def _last_record(self) -> Dict[str, Any]:
+        return self._records[-1]
 
-    def _add_pending(self, attrs: Dict[str, Any]) -> None:
-        self.pending.append(attrs)
+    def _add_pending(self, pending: _Pending) -> None:
+        self._pendings.append(pending)
 
     def _add_cuda_event(self, name: str, phase: str, attrs: Dict[str, Any]) -> None:
         event = torch.cuda.Event(enable_timing=True)
         event.record()
-        attrs["cuda_event"] = event
-        # Do not know the duration yet, so let delta be 0
-        self._add_pending(self._create_record(name, phase, 0, attrs))
+        pending = _Pending(name, phase, event, attrs)
+        self._add_pending(pending)
 
     def iteration_begin(self) -> None:
-        """Start tracing an iteration."""
-        delta = self._calibrate()
-        self.pending_initial_delta = delta
-        self.pending = []
+        """Start tracing an iteration. Note that this performs synchronization."""
+        pad_before = self._calibrate()
+        self._pending_pad_before = pad_before
+        self._pendings = []
         # Mark the beginning of the iteration
         self._add_cuda_event("iteration", "B", {})
 
     def is_tracing(self) -> bool:
-        return self.pending is not None
+        return self._pendings is not None
 
-    def _process_event(attrs: Dict[str, Any], delta: int) -> None:
-        attrs["delta"] = delta
-        del attrs["cuda_event"]
-        if "data" in attrs:
-            # Since we put this in "E" phase, delta is the duration
-            attrs["bandwidth"] = attrs["data"] / (delta / 1e9) # bps
+    def _process_pending_scope(self, ref_ts: int, ref_event: torch.cuda.Event, i: int) -> int:
+        """Process the pending scopes.
+        ref must be a "B".
+        Args:
+            ref_ts: reference timestamp.
+            ref_event: reference event.
+            i: index of the pending scope to be processed.
+        Returns:
+            The next index to process.
+        """
+        while i < len(self._pendings):
+            pending = self._pendings[i]
+            elapsed = int(ref_event.elapsed_time(pending.event) * 1e6)
+            rel_ts = ref_ts + elapsed
+            chrome_event = {
+                **pending.attrs,
+                "name": pending.name,
+                "ph": pending.phase,
+                "rel_ts": rel_ts,
+            }
+            self._add_record(chrome_event)
+            i += 1
+            if pending.phase == "B":
+                # Nested scope
+                i = self._process_pending_scope(rel_ts, pending.event, i)
+            elif pending.phase == "E":
+                # End of this scope
+                if "data" in pending.attrs:
+                    last = self._last_record()
+                    if pending.attrs["data"] is None:
+                        last["bandwidth"] = None
+                    else:
+                        bandwidth = int(pending.attrs["data"] / elapsed * 1e3) # Mbps
+                        last["bandwidth"] = bandwidth
+                return i
+        assert i == len(self._pendings), "Mismatched scopes"
+        return i
 
     def iteration_end(self) -> None:
         """End tracing an iteration. Note that this performs synchronization."""
@@ -101,25 +137,20 @@ class Tracer:
         # Get wall clock duration for this iteration
         wall_duration = self._calibrate()
 
-        # Calculate the delta of each event
-        delta = self.pending_initial_delta
-        cuda_duration = delta
-        for i, begin in enumerate(self.pending[:-1]):
-            end = self.pending[i + 1]
-            # nanoseconds
-            next_delta = int(begin["cuda_event"].elapsed_time(end["cuda_event"]) * 1e6)
-            Tracer._process_event(begin, delta)
-            self._add_record(begin)
-            delta = next_delta
-            cuda_duration += delta
-        end = self.pending[-1]
-        Tracer._process_event(end, delta)
+        self._add_record({
+            "name": "iteration",
+            "ph": "B",
+            "pad_before": self._pending_pad_before,
+        })
+        iteration_begin_event = self._pendings[0].event
+        # We cannot know the absolute timestamp of the first event, so we set it to 0.
+        self._process_pending_scope(0, iteration_begin_event, 1)
+        end = self._last_record()
         end["duration_wall"] = wall_duration
-        end["duration_cuda"] = cuda_duration
-        self._add_record(end)
+        end["duration_cuda"] = end["rel_ts"]
 
-        self.pending_initial_delta = None
-        self.pending = None
+        self._pending_pad_before = None
+        self._pendings = None
 
     def _tick(self, name: str, phase: str, attrs: Dict[str, Any]) -> None:
         if self.is_tracing():
@@ -151,14 +182,14 @@ class Tracer:
         return wrapper
 
     def _push_scope(self, scope) -> None:
-        self.scopes.append(scope)
+        self._scopes.append(scope)
 
     def _pop_scope(self) -> None:
-        self.scopes.pop()
+        self._scopes.pop()
 
     def get(self, q: str) -> Optional[Any]:
         """Query parameter from scopes."""
-        for scope in reversed(self.scopes):
+        for scope in reversed(self._scopes):
             v = scope.get(q)
             if v is not None:
                 return v
@@ -166,17 +197,18 @@ class Tracer:
 
     def set(self, q: str, v: Any) -> None:
         """Set parameter to the nearest requiring scope."""
-        for scope in reversed(self.scopes):
+        for scope in reversed(self._scopes):
             if scope.set(q, v):
                 return
         assert False, f"Cannot find a requiring scope for {q}"
 
     def log(self, filename) -> None:
         with open(filename, "w", newline="") as file:
-            json.dump(self.record, file, indent=2)
+            json.dump(self._records, file, indent=2)
 
 
 tracers = Tracer()
+
 
 def get_tensor_bytes(tensor: torch.Tensor) -> int:
     return tensor.nelement() * tensor.element_size()

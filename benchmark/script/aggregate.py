@@ -37,7 +37,7 @@ def collect_benchmark_files(dir: os.PathLike) -> List[Tuple[Rank, str]]:
 
 @dataclass
 class Event:
-    timestamp: int
+    rel_ts: int
     rank: Rank
     name: str
     ph: str
@@ -58,30 +58,28 @@ def read_benchmark_file(rank: Rank, content: str) -> List[Iteration]:
     rows: List[Dict[str, Any]] = json.loads(content)
     for row in rows:
         if row['name'] == 'iteration' and row['ph'] == 'B':
-            pad_before = row['delta']
+            pad_before = row['pad_before']
             current_iteration = []
-            timeline = 0
         elif row['name'] == 'iteration' and row['ph'] == 'E':
-            data.append(Iteration(pad_before=pad_before, events=current_iteration, duration=timeline))
+            duration = row['duration_wall']
+            data.append(Iteration(pad_before=pad_before, events=current_iteration, duration=duration))
             pad_before = None
             current_iteration = None
-            timeline = None
         else:
-            if timeline is None:
+            if current_iteration is None:
                 # In evaluation, so ignore.
                 continue
             name = row['name']
-            delta = row['delta']
+            rel_ts = row['rel_ts']
             ph = row['ph']
             del row['name']
-            del row['delta']
+            del row['rel_ts']
             del row['ph']
             cat = None
             if row.get('cat') is not None:
                 cat = row['cat']
                 del row['cat']
-            timeline += delta
-            event = Event(timestamp=timeline, rank=rank, name=name, ph=ph, attrs=row, cat=cat)
+            event = Event(rel_ts=rel_ts, rank=rank, name=name, ph=ph, attrs=row, cat=cat)
             current_iteration.append(event)
     return data
 
@@ -96,7 +94,7 @@ def aggregate_benchmark_data(contents: List[List[Iteration]]) -> List[Iteration]
     for i in range(num_iterations):
         pad_before = max(content[i].pad_before for content in contents)
         events = [event for content in contents for event in content[i].events]
-        events.sort(key=lambda event: event.timestamp)
+        events.sort(key=lambda event: event.rel_ts)
         duration = max(content[i].duration for content in contents)
         iterations.append(Iteration(pad_before=pad_before, events=events, duration=duration))
 
@@ -144,7 +142,7 @@ def benchmark_to_chrome_trace(iterations: List[Iteration]) -> Any:
                 'name': event.name,
                 'cname': COLOR_MAP.get(event.name, COLOR_UNKNOWN),
                 'ph': event.ph,
-                'ts': int((event.timestamp + timeline) / 1e3),
+                'ts': int((event.rel_ts + timeline) / 1e3),
                 'pid': event.rank.to_pid(pipeline_paralellism),
                 'tid': event.rank.to_tid(),
                 # iteration number
