@@ -1,7 +1,7 @@
 from functools import wraps
 import json
 import time
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 
 class _TracerScope:
@@ -62,14 +62,19 @@ class Tracer:
         """Time a scope of code."""
         return _TracerScope(self, name, kwargs)
 
-    def duration(self, name: str, duration: int, **attrs: Any) -> None:
-        """Record a duration, in nanoseconds. This should be called at the end of the duration."""
+    def duration(self, name: str, duration: int, delta: int, **attrs: Any) -> None:
+        """Record a duration, in nanoseconds.
+        Here is the timeline of the duration event:
+            |<----- duration ----->|<-- delta -->|
+          begin                   end           now
+        """
         cur = time.time_ns()
-        delta = cur - self.cur - duration
+        delta_begin = cur - self.cur - duration - delta
+        delta_end = duration
         self.cur = cur
 
-        self._add_record(name, "B", delta, attrs)
-        self._add_record(name, "E", duration, {})
+        self._add_record(name, "B", delta_begin, attrs)
+        self._add_record(name, "E", delta_end, {})
 
     def scoped(self, func):
         """Decorator to time a function."""
@@ -81,7 +86,7 @@ class Tracer:
 
     def context(self, **ctx) -> _ContextScope:
         """Pass parameters around in a context."""
-        return _ContextScope(ctx)
+        return _ContextScope(self, ctx)
 
     def _push_context(self, ctx) -> None:
         self.contexts.append(ctx)
@@ -89,8 +94,10 @@ class Tracer:
     def _pop_context(self) -> None:
         self.contexts.pop()
 
-    def get(self, q: str):
+    def get(self, q: str) -> Optional[Any]:
         """Query the current context."""
+        if not self.contexts:
+            return None
         return self.contexts[-1].get(q)
 
     def log(self, filename) -> None:

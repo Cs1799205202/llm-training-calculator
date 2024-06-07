@@ -345,16 +345,19 @@ def _communicate(
 
     if wait_on_reqs and len(reqs) > 0:
         if trace_p2p_recv is not None:
+            # Only support exchange for now.
             assert len(reqs) == 2
-            assert tensor_send_prev is not None == tensor_recv_prev is not None
-            assert tensor_send_next is not None == tensor_recv_next is not None
-            trace_start = torch.cuda.Event(enable_timing=True)
+            assert (tensor_send_prev is None) == (tensor_recv_prev is None)
+            assert (tensor_send_next is None) == (tensor_recv_next is None)
+            trace_begin = torch.cuda.Event(enable_timing=True)
             trace_end = torch.cuda.Event(enable_timing=True)
-            trace_start.record()
-            # Sync the default stream with the recv stream
+            trace_now = torch.cuda.Event(enable_timing=True)
+            trace_begin.record()
+            # Sync the default stream with the recv stream.
             reqs[1].wait()
             trace_end.record()
             reqs[0].wait()
+            trace_now.record()
         else:
             for req in reqs:
                 req.wait()
@@ -366,8 +369,9 @@ def _communicate(
         torch.cuda.synchronize()
 
     if trace_p2p_recv is not None:
-        duration = int(trace_start.elapsed_time(trace_end) * 1e3)
-        tracers.duration(trace_p2p_recv, duration)
+        duration = int(trace_begin.elapsed_time(trace_end) * 1e6)
+        delta = int(trace_end.elapsed_time(trace_now) * 1e6)
+        tracers.duration(trace_p2p_recv, duration, delta)
 
     return tensor_recv_prev, tensor_recv_next, reqs
 
