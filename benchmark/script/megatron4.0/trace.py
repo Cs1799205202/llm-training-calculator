@@ -122,7 +122,10 @@ class Tracer:
                     if pending.attrs["data"] is None:
                         last["bandwidth"] = None
                     else:
-                        bandwidth = int(pending.attrs["data"] / elapsed * 1e3) # Mbps
+                        # 1 Gb = 2 ** 30 b = 2 ** 27 B
+                        gb = pending.attrs["data"] / (2 ** 27)
+                        secs = elapsed / 1e9
+                        bandwidth = gb / secs # Gbps
                         last["bandwidth"] = bandwidth
                 return i
         assert i == len(self._pendings), "Mismatched scopes"
