@@ -171,6 +171,7 @@ class Tracer:
             kwargs: Items to be recorded. If an item is None, it should be filled by some inner scope.
             slots: Parameters that are passed to the scope and must be filled. (They go to both ctx and kwargs.)
         """
+        assert len(args) == 0, "Positional arguments are not supported"
         for slot in slots:
             ctx[slot] = True
             kwargs[slot] = None
