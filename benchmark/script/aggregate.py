@@ -88,6 +88,8 @@ def read_benchmark_file(rank: Rank, content: str) -> List[Iteration]:
     return data
 
 
+ALIGNMENT_EVENTS = ['_reduce', '_gather', 'allreduce']
+
 def aggregate_benchmark_data(contents: List[List[Iteration]]) -> List[Iteration]:
     """Sort and aggregate benchmark data."""
     num_iterations = len(contents[0])
@@ -95,13 +97,34 @@ def aggregate_benchmark_data(contents: List[List[Iteration]]) -> List[Iteration]
 
     iterations = []
 
+    # for i in range(num_iterations):
+    #     pad_before = max(content[i].pad_before for content in contents)
+    #     events = [event for content in contents for event in content[i].events]
+    #     events.sort(key=lambda event: event.rel_ts)
+    #     duration = max(content[i].duration for content in contents)
+    #     iterations.append(Iteration(pad_before=pad_before, events=events, duration=duration))
+
+    world_size = len(contents)
+    offsets = [0] * world_size
     for i in range(num_iterations):
         pad_before = max(content[i].pad_before for content in contents)
-        events = [event for content in contents for event in content[i].events]
+        num_events = len(contents[0][i].events)
+        assert all(len(content[i].events) == num_events for content in contents), 'Expect same number of events'
+        events: List[Event] = []
+        for j in range(num_events):
+            # rank 0 is the reference
+            ref_event = contents[0][i].events[j]
+            ref_ts = ref_event.rel_ts
+            events.append(ref_event)
+            if ref_event.name in ALIGNMENT_EVENTS: # collective operations as alignment points
+                for k in range(1, world_size):
+                    offsets[k] = contents[k][i].events[j].rel_ts - ref_ts
+            for k in range(1, world_size):
+                events.append(contents[k][i].events[j])
+                events[-1].rel_ts -= offsets[k]
         events.sort(key=lambda event: event.rel_ts)
         duration = max(content[i].duration for content in contents)
         iterations.append(Iteration(pad_before=pad_before, events=events, duration=duration))
-
     return iterations
 
 COLOR_UNKNOWN = 'thread_state_unknown'
