@@ -23,15 +23,19 @@ class Rank:
 def collect_benchmark_files(dir: os.PathLike) -> List[Tuple[Rank, str]]:
     """Collect benchmark.json files from the given directory."""
     files = []
-    for file in os.listdir(dir):
-        if file.startswith('benchmark-') and file.endswith('.json'):
-            desc = file[len('benchmark-'):-len('.json')]
-            # disc is "data-*-pipeline-*-tensor-*"
-            fields = desc.split('-')
-            chunks = dict((fields[i], int(fields[i + 1])) for i in range(0, len(fields), 2))
-            rank = Rank(**chunks)
-            with open(os.path.join(dir, file), 'r') as f:
-                files.append((rank, f.read()))
+    with os.scandir(dir) as it:
+        for entry in it:
+            file = entry.name
+            if file.startswith("benchmark-") and file.endswith(".json"):
+                desc = file[len("benchmark-") : -len(".json")]
+                # disc is "data-*-pipeline-*-tensor-*"
+                fields = desc.split("-")
+                chunks = dict(
+                    (fields[i], int(fields[i + 1])) for i in range(0, len(fields), 2)
+                )
+                rank = Rank(**chunks)
+                with open(os.path.join(dir, file), "r") as f:
+                    files.append((rank, f.read()))
     return files
 
 

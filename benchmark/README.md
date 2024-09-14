@@ -9,16 +9,17 @@
 ```bash
 # working directiory: benchmark
 # cd benchmark
+python -m pip install nltk tensorstore zarr
 bash script/benchmark.sh install v4
 bash script/benchmark.sh setup v4
-bash script/benchmark.sh train
+OMP_NUM_THREADS=16 bash script/benchmark.sh train
 ```
 
 从这里就开始不同了。我们的 log 格式和之前完全不同。当 `bash script/benchmark.sh train` 执行完毕后，你可以在 `benchmark/Megatron` 目录下找到许多文件名格式为 `benchmark-data-${data_parallel_rank}-pipeline-${pipeline_model_parallel_rank}-tensor-${tensor_model_parallel_rank}.json` 的文件，它们是每个 rank 的打点文件。我们必须要将它们聚合为一个统一的 log 文件。
 
 ```bash
 # working directiory: benchmark
-bash script/aggregate.py
+python script/aggregate.py
 ```
 
 上述脚本会在当前目录生成一个 `benchmark.json` 文件。这个文件可以被 Chrome 浏览器的 `chrome://tracing` 页面加载。点击 `Load` 按钮，选择这个文件，就可以看到一个时间轴了。

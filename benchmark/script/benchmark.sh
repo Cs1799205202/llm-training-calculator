@@ -54,14 +54,19 @@ install_v3.0() {
 }
 
 install_v4.0() {
-    echo_back "cd ${SHELL_FOLDER}"
-    echo_info "install megatron v4.0, v3.02 requires cuda12+torch2.1, please check your dependency"
-    echo_back "wget --no-check-certificate --content-disposition https://github.com/NVIDIA/Megatron-LM/archive/refs/tags/core_v0.4.0.zip"
-    echo_back "unzip Megatron-LM-core_v0.4.0.zip"
-    echo_back  "cd ../"
-    echo_back "mkdir Megatron"
-    echo_back "mv script/Megatron-LM-core_v0.4.0/*  Megatron"
-    echo_back "rm -r script/Megatron-LM-core_v0.4.0/"
+    if [ -d "../Megatron" ]; then
+        echo_info "Megatron has been installed, skip"
+        echo_back "cd ../"
+    else
+        echo_back "cd ${SHELL_FOLDER}"
+        echo_info "install megatron v4.0, v3.02 requires cuda12+torch2.1, please check your dependency"
+        echo_back "wget --no-check-certificate --content-disposition https://github.com/NVIDIA/Megatron-LM/archive/refs/tags/core_v0.4.0.zip"
+        echo_back "unzip Megatron-LM-core_v0.4.0.zip"
+        echo_back  "cd ../"
+        echo_back "mkdir Megatron"
+        echo_back "mv script/Megatron-LM-core_v0.4.0/*  Megatron"
+        echo_back "rm -r script/Megatron-LM-core_v0.4.0/"
+    fi
     echo_info "install nltk"
     echo_back "pip install nltk"
     echo_info "install tracer"
@@ -110,6 +115,8 @@ train() {
     echo_back "cd ../Megatron"
     echo_info "clear checkpoint"
     rmdir_if_exist ngc_models/release_gpt_base
+    echo_info "clear tracing files"
+    rm benchmark-*.json
     echo_back "bash examples/pretrain_gpt_distributed_small.sh"
 }
 
