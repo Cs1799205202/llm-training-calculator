@@ -116,7 +116,8 @@ def aggregate_benchmark_data(contents: List[List[Iteration]]) -> List[Iteration]
             ref_event = contents[0][i].events[j]
             ref_ts = ref_event.rel_ts
             events.append(ref_event)
-            if ref_event.name in ALIGNMENT_EVENTS: # collective operations as alignment points
+            # collective operations as alignment points
+            if ref_event.name in ALIGNMENT_EVENTS and ref_event.ph == 'E':
                 for k in range(1, world_size):
                     offsets[k] = contents[k][i].events[j].rel_ts - ref_ts
             for k in range(1, world_size):

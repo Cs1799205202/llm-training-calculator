@@ -161,3 +161,6 @@ frontend/.env.local
 # benchmark - Megatron
 /benchmark/Megatron
 /benchmark/script/Megatron*
+/benchmark/benchmark.json
+
+.vscode/
