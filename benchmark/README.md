@@ -9,7 +9,7 @@
 ```bash
 # working directiory: benchmark
 # cd benchmark
-python -m pip install nltk tensorstore zarr
+python -m pip install tensorstore zarr
 bash script/benchmark.sh install v4
 bash script/benchmark.sh setup v4
 OMP_NUM_THREADS=16 bash script/benchmark.sh train

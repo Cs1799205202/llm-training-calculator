@@ -1,8 +1,12 @@
 from dataclasses import dataclass
 import json
+from pathlib import Path
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import logging
 
+logging.basicConfig(level=logging.DEBUG)
 
 @dataclass
 class Rank:
@@ -66,7 +70,13 @@ def read_benchmark_file(rank: Rank, content: str) -> List[Iteration]:
             current_iteration = []
         elif row['name'] == 'iteration' and row['ph'] == 'E':
             duration = row['duration_wall']
-            data.append(Iteration(pad_before=pad_before, events=current_iteration, duration=duration))
+            data.append(
+                Iteration(
+                    pad_before=pad_before if pad_before is not None else 0,
+                    events=current_iteration if current_iteration is not None else [],
+                    duration=duration,
+                )
+            )
             pad_before = None
             current_iteration = None
         else:
@@ -88,44 +98,72 @@ def read_benchmark_file(rank: Rank, content: str) -> List[Iteration]:
     return data
 
 
-ALIGNMENT_EVENTS = ['_reduce', '_gather', 'allreduce']
+TP_ALIGNMENT_EVENTS: List[str] = ['_reduce']
 
 def aggregate_benchmark_data(contents: List[List[Iteration]]) -> List[Iteration]:
     """Sort and aggregate benchmark data."""
     num_iterations = len(contents[0])
     assert all(len(content) == num_iterations for content in contents), 'Mismatched number of iterations'
 
-    iterations = []
+    data_parallelism: int = max(event.rank.data for content in contents for event in content[0].events) + 1
+    pipeline_paralellism: int = max(event.rank.pipeline for content in contents for event in content[0].events) + 1
+    tensor_parallelism: int = max(event.rank.tensor for content in contents for event in content[0].events) + 1
+    logging.debug(f'data_parallelism={data_parallelism}, pipeline_paralellism={pipeline_paralellism}, tensor_parallelism={tensor_parallelism}')
 
-    # for i in range(num_iterations):
-    #     pad_before = max(content[i].pad_before for content in contents)
-    #     events = [event for content in contents for event in content[i].events]
-    #     events.sort(key=lambda event: event.rel_ts)
-    #     duration = max(content[i].duration for content in contents)
-    #     iterations.append(Iteration(pad_before=pad_before, events=events, duration=duration))
+    # temp: List[List[List[List[List[Event]]]]] = [
+    #     [[[[]] * num_iterations] * tensor_parallelism] * pipeline_paralellism
+    # ] * data_parallelism
+    # * only does shallow copy
+    temp: List[List[List[List[List[Event]]]]] = [
+        [
+            [
+                [[] for _ in range(num_iterations)]
+                for _ in range(tensor_parallelism)
+            ]
+            for _ in range(pipeline_paralellism)
+        ]
+        for _ in range(data_parallelism)
+    ]
+    for content in contents:
+        for i in range(num_iterations):
+            # logging.debug(f'content[{i}].events={len(content[i].events)}')
+            for event in content[i].events:
+                temp[event.rank.data][event.rank.pipeline][event.rank.tensor][i].append(event)
+                # logging.debug(f'{event.rank.data} {event.rank.pipeline} {event.rank.tensor} {i} {len(temp[0][0][0][i])}')
+            # logging.debug(f'{num_iterations} {i} {len(temp[0][0][1][i])}')
 
-    world_size = len(contents)
-    offsets = [0] * world_size
+    # align in tensor parallelism group
+    for i in range(data_parallelism):
+        for j in range(pipeline_paralellism):
+            for iteration in range(num_iterations):
+                # use the first rank of the tensor parallelism group as the reference
+                ref_events: List[Event] = temp[i][j][0][iteration]
+                for k in range(1, tensor_parallelism):
+                    events: List[Event] = temp[i][j][k][iteration]
+                    assert len(ref_events) == len(events), 'Mismatched number of events'
+                    offset: int = 0
+                    for l in range(len(ref_events)):
+                        assert ref_events[l].name == events[l].name, 'Mismatched event name'
+                        if ref_events[l].name in TP_ALIGNMENT_EVENTS and ref_events[l].ph == 'E':
+                            offset = ref_events[l].rel_ts - events[l].rel_ts
+                            events[l - 1].rel_ts += offset
+                        events[l].rel_ts += offset
+
+    for content in contents:
+        for i in range(num_iterations):
+            # logging.debug(f'content[{i}].events={len(content[i].events)}, temp={len(temp[0][0][0][i])}')
+            for idx, event in enumerate(content[i].events):
+                event.rel_ts = temp[event.rank.data][event.rank.pipeline][event.rank.tensor][i][idx].rel_ts
+
+    iterations: List[Iteration] = []
+
     for i in range(num_iterations):
-        pad_before = max(content[i].pad_before for content in contents)
-        num_events = len(contents[0][i].events)
-        assert all(len(content[i].events) == num_events for content in contents), 'Expect same number of events'
-        events: List[Event] = []
-        for j in range(num_events):
-            # rank 0 is the reference
-            ref_event = contents[0][i].events[j]
-            ref_ts = ref_event.rel_ts
-            events.append(ref_event)
-            # collective operations as alignment points
-            if ref_event.name in ALIGNMENT_EVENTS and ref_event.ph == 'E':
-                for k in range(1, world_size):
-                    offsets[k] = contents[k][i].events[j].rel_ts - ref_ts
-            for k in range(1, world_size):
-                events.append(contents[k][i].events[j])
-                events[-1].rel_ts -= offsets[k]
+        pad_before: int = max(content[i].pad_before for content in contents)
+        events = [event for content in contents for event in content[i].events]
         events.sort(key=lambda event: event.rel_ts)
-        duration = max(content[i].duration for content in contents)
+        duration: int = max(content[i].duration for content in contents)
         iterations.append(Iteration(pad_before=pad_before, events=events, duration=duration))
+
     return iterations
 
 COLOR_UNKNOWN = 'thread_state_unknown'
@@ -184,11 +222,11 @@ def benchmark_to_chrome_trace(iterations: List[Iteration]) -> Any:
 
 
 if __name__ == "__main__":
-    benchmark_dir = '.'
+    benchmark_dir: Path = Path.cwd()
     files = collect_benchmark_files(benchmark_dir)
     if len(files) == 0:
-        files = collect_benchmark_files(os.path.join(benchmark_dir, 'Megatron'))
+        files = collect_benchmark_files(benchmark_dir/'Megatron')
     contents = [read_benchmark_file(rank, content) for rank, content in files]
-    aggregated = aggregate_benchmark_data(contents)
+    aggregated: List[Iteration] = aggregate_benchmark_data(contents)
     with open('benchmark.json', 'w') as f:
         json.dump(benchmark_to_chrome_trace(aggregated), f, indent=2)
