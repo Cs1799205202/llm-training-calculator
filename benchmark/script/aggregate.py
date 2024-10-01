@@ -99,6 +99,7 @@ def read_benchmark_file(rank: Rank, content: str) -> List[Iteration]:
 
 
 TP_ALIGNMENT_EVENTS: List[str] = ['_reduce']
+PP_ALIGNMENT_EVENTS: List[Tuple[str, str]] = [('recv_backward', 'recv_forward')]
 
 def aggregate_benchmark_data(contents: List[List[Iteration]]) -> List[Iteration]:
     """Sort and aggregate benchmark data."""
@@ -148,6 +149,14 @@ def aggregate_benchmark_data(contents: List[List[Iteration]]) -> List[Iteration]
                             offset = ref_events[l].rel_ts - events[l].rel_ts
                             events[l - 1].rel_ts += offset
                         events[l].rel_ts += offset
+    
+    # align in pipeline parallelism group
+    # In a pipeline parallelism group, the current rank's 'recv_backward' should be aligned with the next rank's 'recv_forward'
+    # e.g. dp=2, pp=2, tp=2:
+    # rank[0-0-0] 'recv_backward' should be aligned with rank[0-1-0] 'recv_forward'
+    # rank[0-0-1] 'recv_backward' should be aligned with rank[0-1-1] 'recv_forward'
+    # Note that the index of events in 'recv_backward' and 'recv_forward' of consecutive ranks may not be the same
+    # TODO 
 
     for content in contents:
         for i in range(num_iterations):

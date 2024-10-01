@@ -159,6 +159,8 @@ frontend/src/.umi-test
 frontend/.env.local
 
 # benchmark - Megatron
-/benchmark/Megatron
-/benchmark/script/Megatron*
-/benchmark/benchmark.json
+benchmark/Megatron/*
+!benchmark/Megatron/megatron
+benchmark/script/Megatron*
+benchmark/benchmark.json
+benchmark/Megatron/benchmark-*.json
