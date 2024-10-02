@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import logging
 
+import numpy as np
 from sklearn.cluster import DBSCAN
 
 logging.basicConfig(level=logging.DEBUG)
@@ -237,14 +238,21 @@ def benchmark_to_chrome_trace(iterations: List[Iteration]) -> Any:
         timeline += iteration.duration
     return traces
 
-def try_detect(contents: List[List[Iteration]], method: str = "DBSCAN") -> Optional[Rank]:
+def try_detect(contents: List[List[Iteration]], method: str = "naive") -> Optional[Rank]:
     # durations [data][pipeline][tensor][]
     durations: List[List[List[List[Dict[str, Any]]]]] = [
-        [[[] for i in range(len(content))] for content in contents]
+        [
+            [
+                []
+                for _ in range(TENSOR_PARALLELISM)
+            ]
+            for _ in range(PIPELINE_PARALLELISM)
+        ]
+        for _ in range(DATA_PARALLELISM)
     ]
 
     for content in contents:
-        rank = content[0].events[0].rank
+        rank: Rank = content[0].events[0].rank
         logging.debug(f'rank={rank}')
         assert all(rank == event.rank for iteration in content for event in iteration.events), 'Mismatched rank'
         start_times = {}
@@ -260,20 +268,36 @@ def try_detect(contents: List[List[Iteration]], method: str = "DBSCAN") -> Optio
                         durations[rank.data][rank.pipeline][rank.tensor].append({
                             'iteration': i,
                             'name': name,
-                            'duration': duration
+                            'duration': duration,
+                            'rank': rank
                         })
+    suspects: List[Rank] = []
     for data in durations:
         for pipeline in data:
-            event_cnt = len(pipeline[0])
+            event_cnt: int = len(pipeline[0])
+            for tensor in pipeline:
+                logging.debug(f'len(tensor)={len(tensor)}, event_cnt={event_cnt}')
             assert all(len(tensor) == event_cnt for tensor in pipeline), 'Mismatched number of events'
             for i in range(event_cnt):
                 event_name = pipeline[0][i]['name']
                 assert all(tensor[i]['name'] == event_name for tensor in pipeline), 'Mismatched event name'
-                times = [tensor[i]['duration'] for tensor in pipeline]
-                outlier = DBSCAN(eps=1, min_samples=2).fit_predict([[t] for t in times])
-                # logging.debug(f'name={event_name}, times={times}, outlier={outlier}')
-                if len(set(outlier)) > 1:
-                    logging.info(f'name={event_name}, outlier={outlier}')
+                times: List[Tuple[int, Rank]] = [(tensor[i]['duration'], tensor[i]['rank']) for tensor in pipeline]
+                times.sort(key=lambda x: x[0])
+                assume_outlier: Tuple[int, Rank] = times[0]
+                times.pop(0)
+                avg = np.mean([x[0] for x in times])
+                std = np.std([x[0] for x in times])
+                if assume_outlier[0] < avg - 3 * std:
+                    suspects.append(assume_outlier[1])
+                    # logging.info(f'Assume outlier: {assume_outlier[1]} {event_name} {assume_outlier[0]} {avg} {avg - 3 * std} {[x[0] for x in times]}')
+    import collections
+    logging.info(f'{collections.Counter(map(str, suspects))}')
+    for i_data, data in enumerate(durations):
+        for i_pipeline, pipeline in enumerate(data):
+            for i_tensor, tensor in enumerate(pipeline):
+                logging.debug(f'{i_data}-{i_pipeline}-{i_tensor} {len(tensor)}')
+    abnormal_rank: str = collections.Counter(map(str, suspects)).most_common(1)[0][0]
+    # TODO: convert rank to index of device
     return None
 
 if __name__ == "__main__":
