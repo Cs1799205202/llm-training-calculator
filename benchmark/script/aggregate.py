@@ -1,3 +1,4 @@
+from argparse import Namespace
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -5,6 +6,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import logging
+
+from sklearn.cluster import DBSCAN
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -101,15 +104,20 @@ def read_benchmark_file(rank: Rank, content: str) -> List[Iteration]:
 TP_ALIGNMENT_EVENTS: List[str] = ['_reduce']
 PP_ALIGNMENT_EVENTS: List[Tuple[str, str]] = [('recv_backward', 'recv_forward')]
 
+DATA_PARALLELISM: int
+PIPELINE_PARALLELISM: int
+TENSOR_PARALLELISM: int
+
 def aggregate_benchmark_data(contents: List[List[Iteration]]) -> List[Iteration]:
     """Sort and aggregate benchmark data."""
     num_iterations = len(contents[0])
     assert all(len(content) == num_iterations for content in contents), 'Mismatched number of iterations'
 
-    data_parallelism: int = max(event.rank.data for content in contents for event in content[0].events) + 1
-    pipeline_paralellism: int = max(event.rank.pipeline for content in contents for event in content[0].events) + 1
-    tensor_parallelism: int = max(event.rank.tensor for content in contents for event in content[0].events) + 1
-    logging.debug(f'data_parallelism={data_parallelism}, pipeline_paralellism={pipeline_paralellism}, tensor_parallelism={tensor_parallelism}')
+    global DATA_PARALLELISM, PIPELINE_PARALLELISM, TENSOR_PARALLELISM
+    DATA_PARALLELISM = max(event.rank.data for content in contents for event in content[0].events) + 1
+    PIPELINE_PARALLELISM = max(event.rank.pipeline for content in contents for event in content[0].events) + 1
+    TENSOR_PARALLELISM = max(event.rank.tensor for content in contents for event in content[0].events) + 1
+    logging.debug(f'data_parallelism={DATA_PARALLELISM}, pipeline_paralellism={PIPELINE_PARALLELISM}, tensor_parallelism={TENSOR_PARALLELISM}')
 
     # temp: List[List[List[List[List[Event]]]]] = [
     #     [[[[]] * num_iterations] * tensor_parallelism] * pipeline_paralellism
@@ -119,11 +127,11 @@ def aggregate_benchmark_data(contents: List[List[Iteration]]) -> List[Iteration]
         [
             [
                 [[] for _ in range(num_iterations)]
-                for _ in range(tensor_parallelism)
+                for _ in range(TENSOR_PARALLELISM)
             ]
-            for _ in range(pipeline_paralellism)
+            for _ in range(PIPELINE_PARALLELISM)
         ]
-        for _ in range(data_parallelism)
+        for _ in range(DATA_PARALLELISM)
     ]
     for content in contents:
         for i in range(num_iterations):
@@ -134,12 +142,12 @@ def aggregate_benchmark_data(contents: List[List[Iteration]]) -> List[Iteration]
             # logging.debug(f'{num_iterations} {i} {len(temp[0][0][1][i])}')
 
     # align in tensor parallelism group
-    for i in range(data_parallelism):
-        for j in range(pipeline_paralellism):
+    for i in range(DATA_PARALLELISM):
+        for j in range(PIPELINE_PARALLELISM):
             for iteration in range(num_iterations):
                 # use the first rank of the tensor parallelism group as the reference
                 ref_events: List[Event] = temp[i][j][0][iteration]
-                for k in range(1, tensor_parallelism):
+                for k in range(1, TENSOR_PARALLELISM):
                     events: List[Event] = temp[i][j][k][iteration]
                     assert len(ref_events) == len(events), 'Mismatched number of events'
                     offset: int = 0
@@ -158,11 +166,11 @@ def aggregate_benchmark_data(contents: List[List[Iteration]]) -> List[Iteration]
     # Note that the index of events in 'recv_backward' and 'recv_forward' of consecutive ranks may not be the same
     # TODO 
 
-    for content in contents:
-        for i in range(num_iterations):
-            # logging.debug(f'content[{i}].events={len(content[i].events)}, temp={len(temp[0][0][0][i])}')
-            for idx, event in enumerate(content[i].events):
-                event.rel_ts = temp[event.rank.data][event.rank.pipeline][event.rank.tensor][i][idx].rel_ts
+    # for content in contents:
+    #     for i in range(num_iterations):
+    #         # logging.debug(f'content[{i}].events={len(content[i].events)}, temp={len(temp[0][0][0][i])}')
+    #         for idx, event in enumerate(content[i].events):
+    #             event.rel_ts = temp[event.rank.data][event.rank.pipeline][event.rank.tensor][i][idx].rel_ts
 
     iterations: List[Iteration] = []
 
@@ -229,13 +237,78 @@ def benchmark_to_chrome_trace(iterations: List[Iteration]) -> Any:
         timeline += iteration.duration
     return traces
 
+def try_detect(contents: List[List[Iteration]], method: str = "DBSCAN") -> Optional[Rank]:
+    # durations [data][pipeline][tensor][]
+    durations: List[List[List[List[Dict[str, Any]]]]] = [
+        [[[] for i in range(len(content))] for content in contents]
+    ]
+
+    for content in contents:
+        rank = content[0].events[0].rank
+        logging.debug(f'rank={rank}')
+        assert all(rank == event.rank for iteration in content for event in iteration.events), 'Mismatched rank'
+        start_times = {}
+        for i in range(len(content)):
+            iteration: Iteration = content[i]
+            for event in iteration.events:
+                name = event.name
+                if event.ph == 'B':
+                    start_times[name] = event.rel_ts
+                elif event.ph == 'E':
+                    if name in start_times:
+                        duration = event.rel_ts - start_times[name]
+                        durations[rank.data][rank.pipeline][rank.tensor].append({
+                            'iteration': i,
+                            'name': name,
+                            'duration': duration
+                        })
+    for data in durations:
+        for pipeline in data:
+            event_cnt = len(pipeline[0])
+            assert all(len(tensor) == event_cnt for tensor in pipeline), 'Mismatched number of events'
+            for i in range(event_cnt):
+                event_name = pipeline[0][i]['name']
+                assert all(tensor[i]['name'] == event_name for tensor in pipeline), 'Mismatched event name'
+                times = [tensor[i]['duration'] for tensor in pipeline]
+                outlier = DBSCAN(eps=1, min_samples=2).fit_predict([[t] for t in times])
+                # logging.debug(f'name={event_name}, times={times}, outlier={outlier}')
+                if len(set(outlier)) > 1:
+                    logging.info(f'name={event_name}, outlier={outlier}')
+    return None
 
 if __name__ == "__main__":
-    benchmark_dir: Path = Path.cwd()
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "-b",
+        "--bench-dir",
+        type=Path,
+        default=Path.cwd() / "Megatron",
+        help="directory containing benchmark files",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=Path("benchmark.json"),
+        help="output chrome trace file",
+    )
+    parser.add_argument(
+        "-d",
+        "--detect",
+        action="store_true",
+        default=False,
+        help="try to detect the abnormal GPU, now assume only one GPU is abnormal",
+    )
+    args = parser.parse_args()
+    benchmark_dir: Path = args.bench_dir
     files = collect_benchmark_files(benchmark_dir)
-    if len(files) == 0:
-        files = collect_benchmark_files(benchmark_dir/'Megatron')
     contents = [read_benchmark_file(rank, content) for rank, content in files]
     aggregated: List[Iteration] = aggregate_benchmark_data(contents)
-    with open('benchmark.json', 'w') as f:
+    with open(args.output, 'w') as f:
         json.dump(benchmark_to_chrome_trace(aggregated), f, indent=2)
+
+    if args.detect:
+        try_detect(contents)
+        pass

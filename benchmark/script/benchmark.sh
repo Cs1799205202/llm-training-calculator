@@ -116,7 +116,7 @@ train() {
     echo_info "clear checkpoint"
     rmdir_if_exist ngc_models/release_gpt_base
     echo_info "clear tracing files"
-    rm benchmark-*.json
+    rm -f benchmark-*.json
     echo_back "bash examples/pretrain_gpt_distributed_small.sh"
 }
 
