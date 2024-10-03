@@ -291,7 +291,7 @@ def try_detect(contents: List[List[Iteration]], method: str = "naive") -> Option
                 std = np.std([x[0] for x in times])
                 if assumed_outlier[0] < avg - 3 * std:
                     suspects.append(assumed_outlier[1])
-                    # logging.info(f'Assume outlier: {assume_outlier[1]} {event_name} {assume_outlier[0]} {avg} {avg - 3 * std} {[x[0] for x in times]}')
+                    # logging.info(f'Assume outlier: {assumed_outlier[1]} {event_name} {assumed_outlier[0]} {avg} {avg - 3 * std} {[x[0] for x in times]}')
     import collections
     logging.info(f'{collections.Counter(map(str, suspects))}')
     for i_data, data in enumerate(durations):
