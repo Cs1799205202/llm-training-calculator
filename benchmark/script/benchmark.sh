@@ -117,6 +117,7 @@ train() {
     rmdir_if_exist ngc_models/release_gpt_base
     echo_info "clear tracing files"
     rm -f benchmark-*.json
+    echo -e "D\tP\tT\tGPU" > gpu-rank-map.txt
     echo_back "bash examples/pretrain_gpt_distributed_small.sh"
 }
 

@@ -109,6 +109,8 @@ DATA_PARALLELISM: int
 PIPELINE_PARALLELISM: int
 TENSOR_PARALLELISM: int
 
+BENCHMARK_DIR: Path
+
 def aggregate_benchmark_data(contents: List[List[Iteration]]) -> List[Iteration]:
     """Sort and aggregate benchmark data."""
     num_iterations = len(contents[0])
@@ -283,12 +285,12 @@ def try_detect(contents: List[List[Iteration]], method: str = "naive") -> Option
                 assert all(tensor[i]['name'] == event_name for tensor in pipeline), 'Mismatched event name'
                 times: List[Tuple[int, Rank]] = [(tensor[i]['duration'], tensor[i]['rank']) for tensor in pipeline]
                 times.sort(key=lambda x: x[0])
-                assume_outlier: Tuple[int, Rank] = times[0]
+                assumed_outlier: Tuple[int, Rank] = times[0]
                 times.pop(0)
                 avg = np.mean([x[0] for x in times])
                 std = np.std([x[0] for x in times])
-                if assume_outlier[0] < avg - 3 * std:
-                    suspects.append(assume_outlier[1])
+                if assumed_outlier[0] < avg - 3 * std:
+                    suspects.append(assumed_outlier[1])
                     # logging.info(f'Assume outlier: {assume_outlier[1]} {event_name} {assume_outlier[0]} {avg} {avg - 3 * std} {[x[0] for x in times]}')
     import collections
     logging.info(f'{collections.Counter(map(str, suspects))}')
@@ -296,9 +298,21 @@ def try_detect(contents: List[List[Iteration]], method: str = "naive") -> Option
         for i_pipeline, pipeline in enumerate(data):
             for i_tensor, tensor in enumerate(pipeline):
                 logging.debug(f'{i_data}-{i_pipeline}-{i_tensor} {len(tensor)}')
-    abnormal_rank: str = collections.Counter(map(str, suspects)).most_common(1)[0][0]
+    abnormal_rank_str: str = collections.Counter(map(str, suspects)).most_common(1)[0][0]
+    abnormal_rank: Rank = Rank(*map(int, abnormal_rank_str.split('-')))
+
     # TODO: convert rank to index of device
-    return None
+    rank_gpu_map = {}
+    # global BENCHMARK_DIR
+    with open(BENCHMARK_DIR/'gpu-rank-map.txt', 'r') as f:
+        header = f.readline()
+        assert header == "D\tP\tT\tGPU\n", f'Invalid header: {header}'
+        for line in f:
+            data, pipeline, tensor, gpu = map(int, line.split())
+            rank_gpu_map[str(Rank(data, pipeline, tensor))] = gpu
+    logging.info(f'abnormal rank: {abnormal_rank}, GPU: {rank_gpu_map[abnormal_rank_str]}')
+    return abnormal_rank
+
 
 if __name__ == "__main__":
     import argparse
@@ -326,8 +340,8 @@ if __name__ == "__main__":
         help="try to detect the abnormal GPU, now assume only one GPU is abnormal",
     )
     args = parser.parse_args()
-    benchmark_dir: Path = args.bench_dir
-    files = collect_benchmark_files(benchmark_dir)
+    BENCHMARK_DIR = args.bench_dir
+    files = collect_benchmark_files(BENCHMARK_DIR)
     contents = [read_benchmark_file(rank, content) for rank, content in files]
     aggregated: List[Iteration] = aggregate_benchmark_data(contents)
     with open(args.output, 'w') as f:
@@ -335,4 +349,3 @@ if __name__ == "__main__":
 
     if args.detect:
         try_detect(contents)
-        pass

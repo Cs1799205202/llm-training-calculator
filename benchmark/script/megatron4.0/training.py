@@ -168,6 +168,11 @@ def pretrain(train_valid_test_dataset_provider,
         tensor_model_parallel_rank = parallel_state.get_tensor_model_parallel_rank()
         pipeline_model_parallel_rank = parallel_state.get_pipeline_model_parallel_rank()
         tracers.log(f"benchmark-data-{data_parallel_rank}-pipeline-{pipeline_model_parallel_rank}-tensor-{tensor_model_parallel_rank}.json")
+        with open("gpu-rank-map.txt", "a") as f:
+            f.write(f"{data_parallel_rank}\t")
+            f.write(f"{pipeline_model_parallel_rank}\t")
+            f.write(f"{tensor_model_parallel_rank}\t")
+            f.write(f"{torch.cuda.current_device()}\n")
 
         if args.save and iteration != 0:
             save_checkpoint(iteration, model, optimizer, opt_param_scheduler)
