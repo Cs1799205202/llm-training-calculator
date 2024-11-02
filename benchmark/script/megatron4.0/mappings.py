@@ -13,7 +13,7 @@ from ..trace import tracers
 from .utils import split_tensor_along_last_dim
 
 
-@tracers.scoped
+@tracers.scoped(slots=["group"])
 def _reduce(input_):
     """All-reduce the input tensor across model parallel group."""
 
@@ -24,10 +24,12 @@ def _reduce(input_):
     # All-reduce.
     torch.distributed.all_reduce(input_, group=get_tensor_model_parallel_group())
 
+    tracers.set_group(get_tensor_and_expert_parallel_group())
+
     return input_
 
 
-@tracers.scoped
+@tracers.scoped()
 def _split_along_last_dim(input_):
     """Split the tensor along its last dimension and keep the
     corresponding slice."""
@@ -47,7 +49,7 @@ def _split_along_last_dim(input_):
     return output
 
 
-@tracers.scoped
+@tracers.scoped()
 def _split_along_first_dim(input_):
     """Split the tensor along its first dimension and keep the
     corresponding slice."""
@@ -71,7 +73,7 @@ def _split_along_first_dim(input_):
     return output
 
 
-@tracers.scoped
+@tracers.scoped()
 def _gather_along_last_dim(input_):
     """Gather tensors and concatinate along the last dimension."""
 
@@ -94,7 +96,7 @@ def _gather_along_last_dim(input_):
     return output
 
 
-@tracers.scoped
+@tracers.scoped()
 def _gather_along_first_dim(input_):
     """Gather tensors and concatinate along the first dimension."""
 
@@ -114,7 +116,7 @@ def _gather_along_first_dim(input_):
     return output
 
 
-@tracers.scoped
+@tracers.scoped()
 def _reduce_scatter_along_first_dim(input_):
     """Reduce-scatter the input tensor across model parallel group."""
     world_size = get_tensor_model_parallel_world_size()
@@ -136,7 +138,7 @@ def _reduce_scatter_along_first_dim(input_):
     return output
 
 
-@tracers.scoped
+@tracers.scoped()
 def _gather_along_first_dim_moe(input_):
     """Gather tensors and concatenate along the first dimension."""
     group = get_tensor_and_expert_parallel_group()
@@ -154,7 +156,7 @@ def _gather_along_first_dim_moe(input_):
     return output
 
 
-@tracers.scoped
+@tracers.scoped()
 def _reduce_scatter_along_first_dim_moe(input_):
     """Reduce-scatter the input tensor across model parallel group."""
     group = get_tensor_and_expert_parallel_group()

@@ -5,6 +5,7 @@ import time
 import torch
 from typing import Any, Dict, List, Optional
 
+from megatron.core import parallel_state
 
 class _TracerScope:
     def __init__(
@@ -35,6 +36,8 @@ class _TracerScope:
 
     def set(self, q: str, v: Any) -> bool:
         """Set to out_attrs, if this is required."""
+        if q in self.out_attrs and self.out_attrs[q] is not None:
+            print(f"q: {q}, v: {v}")
         if q in self.out_attrs and self.out_attrs[q] is None:
             self.out_attrs[q] = v
             return True
@@ -110,6 +113,12 @@ class Tracer:
             The next index to process.
         """
         assert self._pendings is not None
+        data_parallel_rank = parallel_state.get_data_parallel_rank()
+        pipeline_parallel_rank = parallel_state.get_pipeline_model_parallel_rank()
+        tensor_parallel_rank = parallel_state.get_tensor_model_parallel_rank()
+        device = torch.cuda.current_device()
+        global_rank = torch.distributed.get_rank()
+
         while i < len(self._pendings):
             pending = self._pendings[i]
             elapsed = int(ref_event.elapsed_time(pending.event) * 1e6)
@@ -119,6 +128,11 @@ class Tracer:
                 "name": pending.name,
                 "ph": pending.phase,
                 "rel_ts": rel_ts,
+                "dp_rk": data_parallel_rank,
+                "pp_rk": pipeline_parallel_rank,
+                "tp_rk": tensor_parallel_rank,
+                "dev": device,
+                "g_rk": global_rank,
             }
             self._add_record(chrome_event)
             i += 1
@@ -179,8 +193,8 @@ class Tracer:
         self,
         name: Optional[str],
         *args,
-        ctx: Dict[str, Any] = {},
-        slots: List[str] = [],
+        ctx: Optional[Dict[str, Any]] = None,
+        slots: Optional[List[str]] = None,
         **kwargs: Any,
     ) -> _TracerScope:
         """Create a scope of code.
@@ -191,18 +205,45 @@ class Tracer:
             slots: Parameters that are passed to the scope and must be filled. (They go to both ctx and kwargs.)
         """
         assert len(args) == 0, "Positional arguments are not supported"
+        if ctx is None:
+            ctx = {}
+        if slots is None:
+            slots = []
         for slot in slots:
             ctx[slot] = True
             kwargs[slot] = None
         return _TracerScope(self, name=name, in_attrs=ctx, out_attrs=kwargs)
 
-    def scoped(self, func):
-        """Decorator to time a function."""
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            with self.scope(func.__name__):
-                return func(*args, **kwargs)
-        return wrapper
+    # def scoped(self, func):
+    #     """Decorator to time a function."""
+    #     @wraps(func)
+    #     def wrapper(*args, **kwargs):
+    #         with self.scope(func.__name__):
+    #             return func(*args, **kwargs)
+    #     return wrapper
+
+    def scoped(
+        self,
+        name: Optional[str] = None,
+        ctx: Optional[Dict[str, Any]] = None,
+        slots: Optional[List[str]] = None,
+        **kwargs0: Any,
+    ):
+        if ctx is None:
+            ctx = {}
+        if slots is None:
+            slots = []
+        def decorator(func):
+            @wraps(func)
+            def wrapper(*args, **kwargs):
+                if name is None:
+                    with self.scope(func.__name__, ctx=ctx, slots=slots, **kwargs0):
+                        return func(*args, **kwargs)
+                else:
+                    with self.scope(name, ctx=ctx, slots=slots, **kwargs0):
+                        return func(*args, **kwargs)
+            return wrapper
+        return decorator
 
     def _push_scope(self, scope) -> None:
         self._scopes.append(scope)
@@ -224,6 +265,18 @@ class Tracer:
             if scope.set(q, v):
                 return
         assert False, f"Cannot find a requiring scope for {q}"
+
+    def set_group(self, group: torch.distributed.ProcessGroup | List[int]) -> None:
+        # get ranks in the group
+        if isinstance(group, torch.distributed.ProcessGroup):
+            ranks = torch.distributed.get_process_group_ranks(group)
+        else:
+            ranks = group
+        cur_rk = torch.distributed.get_rank()
+        # print(f"cur_rk: {cur_rk}, ranks: {ranks}")
+        assert cur_rk is not None and cur_rk in ranks
+        ranks.remove(cur_rk)
+        self.set("group", ranks)
 
     def log(self, filename) -> None:
         with open(filename, "w", newline="") as file:

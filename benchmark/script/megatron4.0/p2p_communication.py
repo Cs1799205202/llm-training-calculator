@@ -127,6 +127,7 @@ def _batched_p2p_ops(
     group: torch.distributed.ProcessGroup
 ):
     ops = []
+    cur_rk = torch.distributed.get_rank()
     if tensor_send_prev is not None:
         send_prev_op = torch.distributed.P2POp(
             torch.distributed.isend,
@@ -134,6 +135,8 @@ def _batched_p2p_ops(
             get_pipeline_model_parallel_prev_rank(),
             group,
         )
+        if tracers.get("group") is not None:
+            tracers.set_group([cur_rk, get_pipeline_model_parallel_prev_rank()])
         ops.append(send_prev_op)
     if tensor_recv_prev is not None:
         recv_prev_op = torch.distributed.P2POp(
@@ -142,6 +145,8 @@ def _batched_p2p_ops(
             get_pipeline_model_parallel_prev_rank(),
             group,
         )
+        if tracers.get("group") is not None:
+            tracers.set_group([cur_rk, get_pipeline_model_parallel_prev_rank()])
         ops.append(recv_prev_op)
     if tensor_send_next is not None:
         send_next_op = torch.distributed.P2POp(
@@ -150,6 +155,8 @@ def _batched_p2p_ops(
             get_pipeline_model_parallel_next_rank(),
             group,
         )
+        if tracers.get("group") is not None:
+            tracers.set_group([cur_rk, get_pipeline_model_parallel_next_rank()])
         ops.append(send_next_op)
     if tensor_recv_next is not None:
         recv_next_op = torch.distributed.P2POp(
@@ -158,6 +165,8 @@ def _batched_p2p_ops(
             get_pipeline_model_parallel_next_rank(),
             group,
         )
+        if tracers.get("group") is not None:
+            tracers.set_group([cur_rk, get_pipeline_model_parallel_next_rank()])
         ops.append(recv_next_op)
     if len(ops) > 0:
         reqs = torch.distributed.batch_isend_irecv(ops)
@@ -351,7 +360,7 @@ def _communicate(
         assert wait_on_reqs
 
     if wait_on_reqs and len(reqs) > 0:
-        if trace_p2p_recv is not None:
+        if trace_p2p_recv is not None and False:
             # Only support exchange for now.
             assert len(reqs) == 2
             assert (tensor_send_prev is None) == (tensor_recv_prev is None)

@@ -1164,7 +1164,12 @@ def forward_backward_pipelining_without_interleaving(
         else:
             checkpoint_activations_microbatch = None
 
-        with tracers.scope("recv-warmup", micro_batch_index=i, slots=["data"]):
+        with tracers.scope(
+            "recv-warmup",
+            micro_batch_index=i,
+            expect="send-warmup",
+            slots=["data", "group"],
+        ):
             input_tensor = recv_forward(recv_tensor_shapes, config)
         with tracers.scope("forward-warmup", micro_batch_index=i):
             output_tensor = forward_step(
@@ -1178,7 +1183,12 @@ def forward_backward_pipelining_without_interleaving(
                 collect_non_loss_data,
                 checkpoint_activations_microbatch,
             )
-        with tracers.scope("send-warmup", micro_batch_index=i, slots=["data"]):
+        with tracers.scope(
+            "send-warmup",
+            micro_batch_index=i,
+            expect="recv-warmup",
+            slots=["data", "group"],
+        ):
             send_forward(output_tensor, send_tensor_shapes, config)
 
         if not forward_only:
@@ -1190,7 +1200,12 @@ def forward_backward_pipelining_without_interleaving(
     # If all microbatches are run in warmup / cooldown phase, then no need to
     # receive this tensor here.
     if num_microbatches_remaining > 0:
-        with tracers.scope("recv-extra", micro_batch_index=num_warmup_microbatches, slots=["data"]):
+        with tracers.scope(
+            "recv-extra",
+            micro_batch_index=num_warmup_microbatches,
+            expect="send-warmup",
+            slots=["data", "group"],
+        ):
             input_tensor = recv_forward(recv_tensor_shapes, config)
 
     # Run 1F1B in steady state.
@@ -1302,7 +1317,9 @@ def forward_backward_pipelining_without_interleaving(
         # Finalize model grads (perform full grad all-reduce / reduce-scatter for
         # data parallelism, layernorm all-reduce for sequence parallelism, and
         # embedding all-reduce for pipeline parallelism).
-        with tracers.scope("allreduce"):
+        with tracers.scope(
+            name="allreduce",
+        ):
             config.finalize_model_grads_func([model])
             torch.cuda.synchronize()
 
