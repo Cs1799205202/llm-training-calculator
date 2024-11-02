@@ -7,7 +7,13 @@ from typing import Any, Dict, List, Optional
 
 
 class _TracerScope:
-    def __init__(self, tracer: "Tracer", name: Optional[str], in_attrs: Dict[str, Any], out_attrs: Dict[str, Any]) -> None:
+    def __init__(
+        self,
+        tracer: "Tracer",
+        name: Optional[str],
+        in_attrs: Dict[str, Any],
+        out_attrs: Dict[str, Any],
+    ) -> None:
         self.tracer = tracer
         self.name = name
         self.in_attrs = in_attrs
@@ -49,9 +55,9 @@ class Tracer:
 
     def __init__(self) -> None:
         self._records: List[Any] = []
-        self._cur: int = None
-        self._pending_pad_before: int = None
-        self._pendings: List[_Pending] = None
+        self._cur: Optional[int] = None
+        self._pending_pad_before: int
+        self._pendings: Optional[List[_Pending]] = None
         self._scopes: List[_TracerScope] = []
 
     def _calibrate(self) -> int:
@@ -71,12 +77,13 @@ class Tracer:
         return self._records[-1]
 
     def _add_pending(self, pending: _Pending) -> None:
-        self._pendings.append(pending)
+        if self._pendings is not None:
+            self._pendings.append(pending)
 
     def _add_cuda_event(self, name: str, phase: str, attrs: Dict[str, Any]) -> None:
         event = torch.cuda.Event(enable_timing=True)
-        event.record()
-        pending = _Pending(name, phase, event, attrs)
+        event.record() # type: ignore
+        pending = _Pending(name, phase, event, attrs) # type: ignore
         self._add_pending(pending)
 
     def iteration_begin(self) -> None:
@@ -90,7 +97,9 @@ class Tracer:
     def is_tracing(self) -> bool:
         return self._pendings is not None
 
-    def _process_pending_scope(self, ref_ts: int, ref_event: torch.cuda.Event, i: int) -> int:
+    def _process_pending_scope(
+        self, ref_ts: int, ref_event: torch.cuda.Event, i: int
+    ) -> int:
         """Process the pending scopes.
         ref must be a "B".
         Args:
@@ -100,6 +109,7 @@ class Tracer:
         Returns:
             The next index to process.
         """
+        assert self._pendings is not None
         while i < len(self._pendings):
             pending = self._pendings[i]
             elapsed = int(ref_event.elapsed_time(pending.event) * 1e6)
@@ -123,9 +133,9 @@ class Tracer:
                         last["bandwidth"] = None
                     else:
                         # 1 Gb = 2 ** 30 b = 2 ** 27 B
-                        gb = pending.attrs["data"] / (2 ** 27)
+                        gb = pending.attrs["data"] / (2**27)
                         secs = elapsed / 1e9
-                        bandwidth = gb / secs # Gbps
+                        bandwidth = gb / secs  # Gbps
                         last["bandwidth"] = bandwidth
                 return i
         assert i == len(self._pendings), "Mismatched scopes"
@@ -140,11 +150,14 @@ class Tracer:
         # Get wall clock duration for this iteration
         wall_duration = self._calibrate()
 
-        self._add_record({
-            "name": "iteration",
-            "ph": "B",
-            "pad_before": self._pending_pad_before,
-        })
+        self._add_record(
+            {
+                "name": "iteration",
+                "ph": "B",
+                "pad_before": self._pending_pad_before,
+            }
+        )
+        assert self._pendings is not None
         iteration_begin_event = self._pendings[0].event
         # We cannot know the absolute timestamp of the first event, so we set it to 0.
         self._process_pending_scope(0, iteration_begin_event, 1)
@@ -152,7 +165,6 @@ class Tracer:
         end["duration_wall"] = wall_duration
         end["duration_cuda"] = end["rel_ts"]
 
-        self._pending_pad_before = None
         self._pendings = None
 
     def _tick(self, name: str, phase: str, attrs: Dict[str, Any]) -> None:
@@ -163,7 +175,14 @@ class Tracer:
         """Record an event."""
         self._tick(name, "i", attrs)
 
-    def scope(self, name: Optional[str], *args, ctx: Dict[str, Any] = {}, slots: List[str] = [], **kwargs: Any) -> _TracerScope:
+    def scope(
+        self,
+        name: Optional[str],
+        *args,
+        ctx: Dict[str, Any] = {},
+        slots: List[str] = [],
+        **kwargs: Any,
+    ) -> _TracerScope:
         """Create a scope of code.
         Args:
             name: Name of the scope. If None, the scope is not timed.
