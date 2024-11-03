@@ -13,7 +13,9 @@ from ..trace import tracers
 from .utils import split_tensor_along_last_dim
 
 
-@tracers.scoped(slots=["group"])
+@tracers.scoped(
+        slots=["group"],
+        expect="_reduce")
 def _reduce(input_):
     """All-reduce the input tensor across model parallel group."""
 

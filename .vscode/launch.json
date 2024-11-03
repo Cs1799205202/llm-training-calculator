@@ -5,13 +5,14 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "aggregate",
+            "name": "benchmark",
             "type": "debugpy",
             "request": "launch",
             "program": "${file}",
             "cwd": "${workspaceFolder}/benchmark",
             "console": "integratedTerminal",
-            "args": ["-d"]
+            "args": [
+            ]
         }
     ]
 }
