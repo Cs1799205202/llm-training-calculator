@@ -1,0 +1,1 @@
+torchrun --nproc_per_node 1 --nnodes 2 --rdzv_id=11 --rdzv_backend=c10d --rdzv_endpoint=n06:29401 experiment.py --num_rounds 1 --gpu_pcie

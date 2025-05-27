@@ -1,11 +1,11 @@
-from argparse import Namespace
+import collections
 from dataclasses import dataclass
 import json
 from pathlib import Path
 import os
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import logging
+from dependency import amendP2P, dependency
 
 import numpy as np
 
@@ -21,13 +21,20 @@ class Rank:
     def __str__(self) -> str:
         return f"{self.data}-{self.pipeline}-{self.tensor}"
 
+    def __hash__(self) -> int:
+        return hash((self.data, self.pipeline, self.tensor))
+
     def to_pid(self, pipeline_paralellism: int, tensor_parallelism: int) -> int:
         # return self.data * pipeline_paralellism + self.pipeline
-        return self.data * pipeline_paralellism * tensor_parallelism + self.pipeline * tensor_parallelism + self.tensor
+        return (
+            self.data * pipeline_paralellism * tensor_parallelism
+            + self.pipeline * tensor_parallelism
+            + self.tensor
+        )
 
-    def to_tid(self) -> int:
-        # return self.tensor
-        return 0
+    # def to_tid(self) -> int:
+    #     # return self.tensor
+    #     return 0
 
 
 def collect_benchmark_files(dir: os.PathLike) -> List[Tuple[Rank, str]]:
@@ -71,10 +78,10 @@ def read_benchmark_file(rank: Rank, content: str) -> List[Iteration]:
     data = []
     rows: List[Dict[str, Any]] = json.loads(content)
     for row in rows:
-        if row["name"] == "iteration" and row["ph"] == "B":
+        if row["name"] == "iteration" and row["ph"] == "b":
             pad_before = row["pad_before"]
             current_iteration = []
-        elif row["name"] == "iteration" and row["ph"] == "E":
+        elif row["name"] == "iteration" and row["ph"] == "e":
             duration = row["duration_wall"]
             data.append(
                 Iteration(
@@ -135,9 +142,9 @@ def aggregate_benchmark_data(contents: List[List[Iteration]]) -> List[Iteration]
         max(event.rank.tensor for content in contents for event in content[0].events)
         + 1
     )
-    logging.debug(
-        f"data_parallelism={DATA_PARALLELISM}, pipeline_paralellism={PIPELINE_PARALLELISM}, tensor_parallelism={TENSOR_PARALLELISM}"
-    )
+    # logging.debug(
+    #     f"data_parallelism={DATA_PARALLELISM}, pipeline_paralellism={PIPELINE_PARALLELISM}, tensor_parallelism={TENSOR_PARALLELISM}"
+    # )
 
     # temp: List[List[List[List[List[Event]]]]] = [
     #     [[[[]] * num_iterations] * tensor_parallelism] * pipeline_paralellism
@@ -157,8 +164,14 @@ def aggregate_benchmark_data(contents: List[List[Iteration]]) -> List[Iteration]
     #             temp[event.rank.data][event.rank.pipeline][event.rank.tensor][i].append(
     #                 event
     #             )
-                # logging.debug(f'{event.rank.data} {event.rank.pipeline} {event.rank.tensor} {i} {len(temp[0][0][0][i])}')
-            # logging.debug(f'{num_iterations} {i} {len(temp[0][0][1][i])}')
+    # logging.debug(f'{event.rank.data} {event.rank.pipeline} {event.rank.tensor} {i} {len(temp[0][0][0][i])}')
+    # logging.debug(f'{num_iterations} {i} {len(temp[0][0][1][i])}')
+
+    ####################################
+    ####################################
+    ######  Timeline alignment, optional
+    ####################################
+    ####################################
 
     # align in tensor parallelism group
     # for i in range(DATA_PARALLELISM):
@@ -216,7 +229,7 @@ COLOR_BACKWARD = "thread_state_iowait"
 COLOR_RECV = "rail_response"
 COLOR_SEND = "rail_animation"
 COLOR_EXCHANGE_NEXT = "thread_state_runnable"
-COLOR_EXCHANGE_PREV = "thread_state_sleeping"
+COLOR_EXCHANGE_PREV = "thread_state_uninterruptible"
 COLOR_ALLREDUCE = "light_memory_dump"
 COLOR_OPTIMIZER = "detailed_memory_dump"
 COLOR_MAP = {
@@ -241,7 +254,71 @@ COLOR_MAP = {
 }
 
 
-def benchmark_to_chrome_trace(iterations: List[Iteration]) -> Any:
+def transform(traces: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    transformed: List[Dict[str, Any]] = []
+    on_flight: Dict[int, List[int]] = {}
+    rank_map: Dict[int, Dict[int, Dict[int, int]]] = {}
+    for trace in traces:
+        rank_map.setdefault(trace["args"]["dp_rk"], {}).setdefault(
+            trace["args"]["pp_rk"], {}
+        )[trace["args"]["tp_rk"]] = trace["pid"]
+        if trace["ph"] == "B":
+            transformed.append(trace)
+            on_flight.setdefault(trace["pid"], []).append(len(transformed) - 1)
+        elif trace["ph"] == "E":
+            idx = on_flight[trace["pid"]].pop()
+            transformed[idx]["dur"] = trace["ts"] - transformed[idx]["ts"]
+            transformed[idx]["ph"] = "X"
+            for key in trace["args"]:
+                if (
+                    key not in transformed[idx]["args"]
+                    or transformed[idx]["args"][key] == trace["args"][key]
+                ):
+                    transformed[idx]["args"][key] = trace["args"][key]
+                else:
+                    print(
+                        f"Conflict: {key} {transformed[idx]['args'][key]} {trace['args'][key]}"
+                    )
+
+    for d in range(DATA_PARALLELISM):
+        for p in range(PIPELINE_PARALLELISM):
+            for t in range(TENSOR_PARALLELISM):
+                transformed.append(
+                    {
+                        "ph": "M",
+                        "name": "process_name",
+                        "pid": rank_map[d][p][t],
+                        "args": {"name": f"DP{d}-PP{p}-TP{t}"},
+                    }
+                )
+    # for pid in on_flight.keys():
+    #     transformed.append({
+    #         "ph": "M",
+    #         "pid": pid,
+    #         "name": "process_sort_index",
+    #         "args": {
+    #             "sort_index": pid
+    #         }
+    #     })
+    for d in range(DATA_PARALLELISM):
+        for p in range(PIPELINE_PARALLELISM):
+            for t in range(TENSOR_PARALLELISM):
+                transformed.append(
+                    {
+                        "ph": "M",
+                        "name": "process_sort_index",
+                        "pid": rank_map[d][p][t],
+                        "args": {
+                            "sort_index": Rank(d, p, t).to_pid(
+                                PIPELINE_PARALLELISM, TENSOR_PARALLELISM
+                            )
+                        },
+                    }
+                )
+    return transformed
+
+
+def benchmark_to_chrome_trace(iterations: List[Iteration]) -> List[Dict[str, Any]]:
     """Convert benchmark data to Chrome trace format."""
     traces = []
     timeline = 0
@@ -253,8 +330,10 @@ def benchmark_to_chrome_trace(iterations: List[Iteration]) -> Any:
                 "cname": COLOR_MAP.get(event.name, COLOR_UNKNOWN),
                 "ph": event.ph,
                 "ts": int((event.rel_ts + timeline) / 1e3),
-                "pid": event.rank.to_pid(PIPELINE_PARALLELISM, TENSOR_PARALLELISM),
-                "tid": event.rank.to_tid(),
+                # "pid": event.rank.to_pid(PIPELINE_PARALLELISM, TENSOR_PARALLELISM),
+                "pid": event.attrs["g_rk"],
+                # "tid": event.rank.to_tid(),
+                "tid": 0,
                 # iteration number
                 "args": {"iteration": i, **event.attrs},
             }
@@ -262,13 +341,57 @@ def benchmark_to_chrome_trace(iterations: List[Iteration]) -> Any:
                 trace["cat"] = event.cat
             traces.append(trace)
         timeline += iteration.duration
-    # traces.sort(key=lambda trace: (trace["pid"], trace["tid"], trace["ts"]))
+
+    traces = transform(traces)
+
     return traces
 
 
+def detect_in_data_parallelism_group(
+    rank: Rank, contents: List[List[Iteration]], traces: List[Dict[str, Any]]
+) -> None:
+    all_cnt, slow_cnt = 0, 0
+    g_rk = -1
+    for trace in traces:
+        if (
+            "dp_rk" in trace["args"]
+            and "pp_rk" in trace["args"]
+            and "tp_rk" in trace["args"]
+            and trace["args"]["dp_rk"] == rank.data
+            and trace["args"]["pp_rk"] == rank.pipeline
+            and trace["args"]["tp_rk"] == rank.tensor
+        ):
+            g_rk = trace["args"]["g_rk"]
+            if trace["name"] in ["_reduce"]:
+                all_cnt += 1
+                related_sync_op = trace["args"]["related_sync_op"]
+                related_sync_op_group: List[str] = related_sync_op.split(" ")
+                related_sync_op_group.remove(str(trace["args"]["id"]))
+                related_sync_op_idx = map(int, related_sync_op_group)
+
+                avg = np.mean([traces[i]["dur"] for i in related_sync_op_idx])
+                if trace["dur"] < 0.9 * avg:
+                    slow_cnt += 1
+    # logging.info(f"rank={rank} all_cnt={all_cnt} slow_cnt={slow_cnt}")
+
+    if slow_cnt > 0.5 * all_cnt:
+        logging.info(f"Abnormal GPU: {rank} {all_cnt} {slow_cnt}")
+        with open("abnormal.txt", "w") as f:
+            f.write(f"{g_rk} {rank}\n")
+
+
 def try_detect(
-    contents: List[List[Iteration]], method: str = "naive"
+    contents: List[List[Iteration]], traces: List[Dict[str, Any]], method: str = "naive"
 ) -> Optional[Rank]:
+    """
+    Try to detect the abnormal GPU, now assume only one GPU is abnormal.
+
+    Keyword arguments:
+    contents -- benchmark data
+    traces -- chrome trace data, has same data as contents
+    method -- detection method, now only support 'naive'
+    """
+
     # durations [data][pipeline][tensor][]
     durations: List[List[List[List[Dict[str, Any]]]]] = [
         [[[] for _ in range(TENSOR_PARALLELISM)] for _ in range(PIPELINE_PARALLELISM)]
@@ -277,79 +400,75 @@ def try_detect(
 
     for content in contents:
         rank: Rank = content[0].events[0].rank
-        logging.debug(f"rank={rank}")
+        # logging.debug(f"rank={rank}")
         assert all(
             rank == event.rank for iteration in content for event in iteration.events
         ), "Mismatched rank"
         start_times = {}
-        for i in range(len(content)):
+        for i in range(1, len(content)):
             iteration: Iteration = content[i]
             for event in iteration.events:
                 name = event.name
                 if event.ph == "B":
                     start_times[name] = event.rel_ts
                 elif event.ph == "E":
-                    if name in start_times:
-                        duration = event.rel_ts - start_times[name]
-                        durations[rank.data][rank.pipeline][rank.tensor].append(
-                            {
-                                "iteration": i,
-                                "name": name,
-                                "duration": duration,
-                                "rank": rank,
-                            }
-                        )
-    suspects: List[Rank] = []
-    for data in durations:
-        for pipeline in data:
-            event_cnt: int = len(pipeline[0])
-            for tensor in pipeline:
-                logging.debug(f"len(tensor)={len(tensor)}, event_cnt={event_cnt}")
-            assert all(
-                len(tensor) == event_cnt for tensor in pipeline
-            ), "Mismatched number of events"
+                    assert name in start_times, f"Missing start time for {name}"
+                    # if name not in ["_reduce"]:
+                    #     logging.debug(f"{name} {event.rel_ts - start_times[name]}")
+                    duration = event.rel_ts - start_times[name]
+                    durations[rank.data][rank.pipeline][rank.tensor].append(
+                        {
+                            "iteration": i,
+                            "name": name,
+                            "duration": duration,
+                            "rank": rank,
+                        }
+                    )
+
+    suspects: List[Tuple[Rank, str]] = []
+
+    # first in data parallelism group
+    for p in range(PIPELINE_PARALLELISM):
+        for t in range(TENSOR_PARALLELISM):
+            event_cnt: int = len(durations[0][p][t])
             for i in range(event_cnt):
-                event_name = pipeline[0][i]["name"]
+                event_name = durations[0][p][t][i]["name"]
                 assert all(
-                    tensor[i]["name"] == event_name for tensor in pipeline
+                    durations[d][p][t][i]["name"] == event_name
+                    for d in range(DATA_PARALLELISM)
                 ), "Mismatched event name"
                 times: List[Tuple[int, Rank]] = [
-                    (tensor[i]["duration"], tensor[i]["rank"]) for tensor in pipeline
+                    (durations[d][p][t][i]["duration"], durations[d][p][t][i]["rank"])
+                    for d in range(DATA_PARALLELISM)
                 ]
                 times.sort(key=lambda x: x[0])
-                assumed_outlier: Tuple[int, Rank] = times[0]
-                times.pop(0)
-                avg = np.mean([x[0] for x in times])
-                std = np.std([x[0] for x in times])
-                if assumed_outlier[0] < avg - 3 * std:
-                    suspects.append(assumed_outlier[1])
-                    # logging.info(f'Assume outlier: {assumed_outlier[1]} {event_name} {assumed_outlier[0]} {avg} {avg - 3 * std} {[x[0] for x in times]}')
+                if event_name in ["loss", "allreduce"]:
+                    assumed_outlier: Tuple[int, Rank] = times[0]
+                    avg = np.mean([x[0] for x in times[1:]])
+                    std = np.std([x[0] for x in times[1:]])
+                    # logging.info(f'{times} {avg} {std}')
+                    if assumed_outlier[0] < 0.9 * avg:
+                        # logging.info(
+                        #     f"Assume outlier: {assumed_outlier[1]} {event_name} {assumed_outlier[0]} {avg} {avg - 3 * std} {[x[0] for x in times]} {[str(x[1]) for x in times]}"
+                        # )
+                        suspects.append((assumed_outlier[1], event_name))
+                elif event_name in ["backward"]:
+                    assumed_outlier = times[-1]
+                    avg = np.mean([x[0] for x in times[:-1]])
+                    std = np.std([x[0] for x in times[:-1]])
+                    # logging.info(f'{times} {avg} {std}')
+                    if assumed_outlier[0] > 1.1 * avg:
+                        # logging.info(
+                        #     f"Assume outlier: {assumed_outlier[1]} {event_name} {assumed_outlier[0]} {avg} {avg + 3 * std} {[x[0] for x in times]} {[str(x[1]) for x in times]}"
+                        # )
+                        suspects.append((assumed_outlier[1], event_name))
 
-    import collections
+    # count the number of suspects
 
-    logging.info(f"{collections.Counter(map(str, suspects))}")
-    for i_data, data in enumerate(durations):
-        for i_pipeline, pipeline in enumerate(data):
-            for i_tensor, tensor in enumerate(pipeline):
-                logging.debug(f"{i_data}-{i_pipeline}-{i_tensor} {len(tensor)}")
-    abnormal_rank_str: str = collections.Counter(map(str, suspects)).most_common(1)[0][
-        0
-    ]
-    abnormal_rank: Rank = Rank(*map(int, abnormal_rank_str.split("-")))
-
-    # TODO: convert rank to index of device
-    rank_gpu_map = {}
-    # global BENCHMARK_DIR
-    with open(BENCHMARK_DIR / "gpu-rank-map.txt", "r") as f:
-        header = f.readline()
-        assert header == "D\tP\tT\tGPU\n", f"Invalid header: {header}"
-        for line in f:
-            data, pipeline, tensor, gpu = map(int, line.split())
-            rank_gpu_map[str(Rank(data, pipeline, tensor))] = gpu
-    logging.info(
-        f"abnormal rank: {abnormal_rank}, GPU: {rank_gpu_map[abnormal_rank_str]}"
-    )
-    return abnormal_rank
+    counter = collections.Counter([x[0] for x in suspects])
+    for k, v in counter.items():
+        if v > 5:
+            detect_in_data_parallelism_group(k, contents, traces)
 
 
 if __name__ == "__main__":
@@ -382,8 +501,15 @@ if __name__ == "__main__":
     files = collect_benchmark_files(BENCHMARK_DIR)
     contents = [read_benchmark_file(rank, content) for rank, content in files]
     aggregated: List[Iteration] = aggregate_benchmark_data(contents)
+
+    output = benchmark_to_chrome_trace(aggregated)
+
+    output = dependency(output)
+
+    output = amendP2P(output)
+
     with open(args.output, "w") as f:
-        json.dump(benchmark_to_chrome_trace(aggregated), f, indent=2)
+        json.dump(output, f, indent=2)
 
     if args.detect:
-        try_detect(contents)
+        try_detect(contents=contents, traces=output)

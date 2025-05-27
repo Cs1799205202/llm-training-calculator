@@ -118,6 +118,7 @@ train() {
     echo_info "clear tracing files"
     rm -f benchmark-*.json
     echo -e "D\tP\tT\tGPU" > gpu-rank-map.txt
+    echo_back "sed -i 's/from pkg_resources import packaging/import packaging/' megatron/core/transformer/custom_layers/transformer_engine.py"
     echo_back "bash examples/pretrain_gpt_distributed_small.sh"
 }
 

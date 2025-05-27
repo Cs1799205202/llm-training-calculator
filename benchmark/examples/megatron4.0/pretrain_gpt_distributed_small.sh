@@ -11,8 +11,8 @@ MASTER_PORT=6000
 NNODES=1
 NODE_RANK=0
 WORLD_SIZE=$(($GPUS_PER_NODE*$NNODES))
-TENSOR_MP_SIZE=1
-PIPELINE_MP_SIZE=8
+TENSOR_MP_SIZE=4
+PIPELINE_MP_SIZE=2
 VIRTUAL_STAGE_LAYER=1
 
 CHECKPOINT_PATH=ngc_models/release_gpt_base
@@ -29,9 +29,9 @@ DISTRIBUTED_ARGS="
 "
 
 GPT_ARGS="
-    --num-layers 32 \
-    --hidden-size 4096 \
-    --num-attention-heads 32 \
+    --num-layers 16 \
+    --hidden-size 1024 \
+    --num-attention-heads 16 \
     --seq-length 2048 \
     --max-position-embeddings 2048 \
     --micro-batch-size 2 \

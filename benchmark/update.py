@@ -12,12 +12,14 @@ def copy_diff_files(dcmp):
                 "script/megatron4.0/" + file
             ) as f2:
                 diff = difflib.unified_diff(f2.readlines(), f1.readlines())
+                print(f"diff of {file}:")
                 print("".join(diff))
         else:
             with open(dcmp.left + "/" + file) as f1, open(
                 dcmp.right + "/" + file
             ) as f2:
                 diff = difflib.unified_diff(f2.readlines(), f1.readlines())
+                print(f"diff of {file}:")
                 print("".join(diff))
 
         print(f"copying {dcmp.left}/{file} to script/megatron4.0/{file}")
